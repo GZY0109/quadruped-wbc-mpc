@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+results/*.mp4
+results/*.npz
+*.log
+.DS_Store
