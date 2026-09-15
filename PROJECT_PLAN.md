@@ -10,11 +10,20 @@
 
 ## Phase 1：MuJoCo 环境 + 基线模型（预计 2-3 天）
 
+> **状态：✅ 已完成（2026-09-15）**。选用 Unitree Go2，模型 vendored 进 `assets/unitree_go2/`；
+> `src/sim_env.py`（`Go2Sim`）封装完成，`scripts/stand_test.py` PD 站立测试 PASS。详见 `PROGRESS.md`。
+
 - 机器人模型：用 `mujoco_menagerie` 里的 Unitree Go1/Go2 或 A1 MJCF 模型（已经过 MuJoCo 官方适配，省去建模时间）。
 - 目标：跑通开环/简单站立控制，确认关节名、执行器、传感器（IMU、足端接触）读写正常。
 - 交付物：`src/sim_env.py`（封装 MuJoCo 环境，暴露状态读取/力矩下发接口）。
 
 ## Phase 2：Convex MPC + WBC 控制器实现（预计 1-1.5 周）
+
+> **状态：🚧 进行中**。选型已定（2026-09-15，用户确认）：**方案 A —— 参考架构自实现，MuJoCo 原生**。
+> 以 [elijah-waichong-chan/go2-convex-mpc](https://github.com/elijah-waichong-chan/go2-convex-mpc)（MPC 层，MIT）
+> 与 [benaziel/quadruped_wbc](https://github.com/benaziel/quadruped_wbc)（WBC 层）为参考，两层都用 OSQP 自实现，
+> 动力学量走 MuJoCo `mj_fullM`/`mj_jac`，免掉 Pinocchio/CasADi/DDS。候选评估与四步实现计划见 `PROGRESS.md`。
+> 尚未开始写控制器代码。
 
 - **Convex MPC 层**：简化刚体动力学模型（Single Rigid Body Dynamics），在时域窗口内求解足端反力，QP 用 `osqp` 或 `qpOASES` 求解，状态量：base 位置/姿态/线速度/角速度（13维线性化模型，标准 MIT Cheetah 公式）。
 - **WBC 层**：给定 MPC 输出的期望反力和摆动腿轨迹，求解全身关节力矩的二次规划（QP），处理接触约束、力矩限幅、摩擦锥约束。
