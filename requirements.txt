@@ -1,0 +1,8 @@
+# Phase 1 core deps. Rendering on headless GPU pods uses OSMesa (software GL),
+# pulled in via the system libosmesa6 package + imageio[ffmpeg] for video encoding.
+mujoco>=3.13,<4
+osqp>=1.1,<2          # Convex-MPC / WBC QP solver (Phase 2)
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.7       # result plots (Phase 3)
+imageio[ffmpeg]>=2.31 # demo videos / GIFs

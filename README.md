@@ -7,16 +7,37 @@
 ## 结构
 
 ```
-src/           控制器与仿真代码
-experiments/   实验脚本与配置
-results/       实验数据、图表、视频
-docs/          补充文档
+assets/unitree_go2/   Go2 MJCF 模型（vendored from mujoco_menagerie, BSD-3）
+                      + go2_scene.xml（自定义场景：地面 + IMU/足端传感器）
+src/                  控制器与仿真代码（sim_env.py: 仿真环境封装）
+scripts/              可运行脚本（stand_test.py: Phase 1 站立 smoke test）
+experiments/          实验脚本与配置
+results/              实验数据、图表、视频
+docs/                 补充文档
 ```
 
 ## 环境
 
-- Phase 1: Python + MuJoCo + OSQP（Convex MPC 求解）
-- Phase 2: Isaac Lab（GPU 并行仿真 + RL baseline）
+- Phase 1-3: Python + MuJoCo + OSQP（Convex MPC 求解），MuJoCo CPU 仿真为主
+- Phase 4: Isaac Lab（GPU 并行仿真 + RL baseline）
+
+安装：
+
+```bash
+# 系统 GL（headless 渲染，软件 OSMesa 后端）
+sudo apt-get install -y libosmesa6 libgl1-mesa-dri
+pip install -r requirements.txt
+```
+
+快速自测（关节 PD 站立，验证仿真/控制闭环）：
+
+```bash
+python scripts/stand_test.py           # 无头，打印站立稳定性报告
+python scripts/stand_test.py --video   # 另存 results/stand_test.mp4
+```
+
+> 无头渲染默认走 OSMesa（`sim_env.py` 里 `MUJOCO_GL` 默认设为 `osmesa`），
+> 无需手动配置；有显示环境可自行 `export MUJOCO_GL=egl/glfw` 覆盖。
 
 ## 复现结果摘要
 
