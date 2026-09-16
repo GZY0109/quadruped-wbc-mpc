@@ -85,11 +85,19 @@ class WBCGains:
     w_ori: float = 1000.0
     w_pos: float = 500.0
     w_swing: float = 200.0
+    w_contact: float = 300.0   # soft stance no-slip (kept soft so qddot stays
+                               # free to satisfy the EoM -> QP stays feasible)
     w_force: float = 1.0       # track MPC reaction forces (soft preference)
     # regularization
     w_reg_qdd: float = 1e-3
     w_reg_f: float = 1e-4
     w_reg_tau: float = 1e-4
+    # task-acceleration saturation: keeps strong gains from demanding explosive
+    # forces on a large transient error (which would saturate torque / launch
+    # the trunk). Small errors are still corrected stiffly; big ones are capped.
+    a_lin_max: float = 8.0     # m/s^2   (per horizontal/vertical axis)
+    a_ang_max: float = 30.0    # rad/s^2 (per axis)
+    a_swing_max: float = 60.0  # m/s^2   (swing foot)
 
 
 def _so3_log(R: np.ndarray) -> np.ndarray:
@@ -237,20 +245,24 @@ class WholeBodyController:
         e_ori = _so3_log(R.T @ R_des)                # body-frame attitude error
         a_ang = (np.asarray(gns.kp_ori) * e_ori
                  + np.asarray(gns.kd_ori) * (np.asarray(base_omega_des) - omega))
+        a_ang = np.clip(a_ang, -gns.a_ang_max, gns.a_ang_max)
         A_ori = np.zeros((3, N_DEC)); A_ori[:, 3:6] = np.eye(3)
         add_task(A_ori, a_ang, gns.w_ori)
 
         # base position task (world): qddot[0:3] = a_lin_des
         a_lin = (np.asarray(gns.kp_pos) * (np.asarray(base_pos_des) - p)
                  + np.asarray(gns.kd_pos) * (np.asarray(base_vel_des) - v))
+        a_lin = np.clip(a_lin, -gns.a_lin_max, gns.a_lin_max)
         A_pos = np.zeros((3, N_DEC)); A_pos[:, 0:3] = np.eye(3)
         add_task(A_pos, a_lin, gns.w_pos)
 
-        # per-foot swing acceleration tasks (stance handled as a hard contact
-        # constraint below, not a soft task).
+        # per-foot Cartesian acceleration tasks: swing feet track the gait
+        # reference; stance feet target zero acceleration (soft no-slip).
         for i in range(N_LEGS):
-            if not contact[i]:
-                A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
+            A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
+            if contact[i]:
+                add_task(A_foot, -bias[i], gns.w_contact)
+            else:
                 foot_v = J[i] @ qvel
                 pref = swing_pos_ref[i] if swing_pos_ref is not None else np.zeros(3)
                 vref = swing_vel_ref[i] if swing_vel_ref is not None else np.zeros(3)
@@ -258,6 +270,7 @@ class WholeBodyController:
                 foot_p = data.site_xpos[self.foot_site_ids[i]].copy()
                 a_des = (aref + gns.kp_swing * (pref - foot_p)
                          + gns.kd_swing * (vref - foot_v))
+                a_des = np.clip(a_des, -gns.a_swing_max, gns.a_swing_max)
                 add_task(A_foot, a_des - bias[i], gns.w_swing)
 
         # contact force tracking (stance feet only)
@@ -288,15 +301,11 @@ class WholeBodyController:
         A_eom[:, TAU] = -self._St
         A_rows.append(A_eom); l_rows.append(-h); u_rows.append(-h)
 
-        # (2) stance feet: hard no-slip contact, J_i qddot = -bias_i (zero
-        #     Cartesian acceleration). swing feet: f_i = 0 (no force off-ground).
+        # (2) swing feet: f_i = 0 (no force off the ground). Stance no-slip is a
+        #     soft task (above), keeping qddot free so the EoM stays satisfiable.
         BIG = 1e6
         for i in range(N_LEGS):
-            if contact[i]:
-                A_ct = np.zeros((3, N_DEC)); A_ct[:, QDD] = J[i]
-                A_rows.append(A_ct)
-                l_rows.append(-bias[i]); u_rows.append(-bias[i])
-            else:
+            if not contact[i]:
                 A_z = np.zeros((3, N_DEC))
                 A_z[:, NV + 3 * i:NV + 3 * i + 3] = np.eye(3)
                 A_rows.append(A_z); l_rows.append(np.zeros(3)); u_rows.append(np.zeros(3))

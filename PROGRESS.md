@@ -12,15 +12,14 @@
 
 ## 当前状态
 
-`Phase 2 - 进行中（①步态 ②MPC ③WBC 已完成，下一步 ④ 集成 trot 回路）`
+`Phase 2 - 进行中（①②③ 完成；④ 集成回路搭好但 trot 尚未稳定，见下方诊断）`
 
-- Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py` 封装完成并通过站立 smoke test。
-- Phase 2 选型 ✅ 已拍板（用户确认）：**方案 A —— 参考架构自实现（MuJoCo 原生，两层都用 OSQP）**。
-- Phase 2 ① ✅ `src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS。
-- Phase 2 ② ✅ `src/mpc.py` —— SRBD 13 维凸 MPC（OSQP），11/11 PASS，warm-start ~0.8ms/solve。
-- Phase 2 ③ ✅ `src/wbc.py` —— 关节力矩 QP（42 维，`mj_fullM`/`mj_jacSite`/`qfrc_bias`），9/9 PASS，
-  闭环 WBC-only 站立 2s 稳定（漂移 0、max|pitch| 0.17°），~0.2ms/solve。
-- **下一步（Phase 2 步骤 ④）**：`scripts/trot_demo.py` 集成 MPC(低频)+WBC(高频)+摆动腿，平地 trot 跑通出视频。
+- Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py`。
+- Phase 2 选型 ✅ 方案 A（参考架构自实现，MuJoCo 原生，两层 OSQP）。
+- Phase 2 ① ✅ `src/gait.py`；② ✅ `src/mpc.py`；③ ✅ `src/wbc.py`——三层各自单元测试全 PASS。
+- Phase 2 ④ 🚧 `scripts/trot_demo.py`：gait+MPC(40Hz)+WBC(500Hz)+摆动腿闭环已搭好并能跑，
+  **4 足站立稳**，但**平地 trot 尚不能持续**——每个"2 对角腿支撑"相里躯干缓慢翻滚，多周期累积后 ~1–1.4s 摔倒。
+  已定位根因并修掉数个子问题（详见记录），仍缺对"2 对角支撑不稳定模态"的有效镇定。**待与用户确认下一步方向。**
 
 ### 重开 Pod / 新会话恢复工作的步骤（重要）
 
@@ -36,6 +35,10 @@ git log --oneline -10              # 核对代码进度与本文件一致
 然后读本文件"当前状态"+"Phase 2 实现计划"，从上次断点接着做。
 
 ## 待决策（已解决）
+
+- **[待决策 - Phase 2④ trot 镇定方向]** 平地 trot 稳不住（根因见记录：反应式单 QP WBC 镇不住 2 对角支撑不稳定模态）。
+  三个候选方向 (a) MPC 主镇定 + WBC 跟力 / (b) 任务优先级 WBC / (c) 降低交付目标。**需用户拍板后再继续，不自行决定大方向。**
+
 
 - **[已决策 2026-09-15] Convex MPC + WBC 参考实现选型 → 采用方案 A（参考架构自实现，MuJoCo 原生）。**
 
@@ -76,6 +79,37 @@ git log --oneline -10              # 核对代码进度与本文件一致
 ## 记录
 
 <!-- 格式：### Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么（尽量不写日期，git 已有时间戳） -->
+
+### Phase 2④ - 集成回路搭好；trot 尚未稳定（诊断 + 部分修复，待定方向）
+
+**做了什么**
+- `scripts/trot_demo.py`：把三层串成闭环——gait 出接触/摆动相位 → MPC(~33Hz, dt=0.03,N=10) 出反力 →
+  WBC(500Hz) 出力矩 → sim.step；含 stand 预热、速度 ramp、Raibert 落脚点、摆线摆动、日志/视频/早停摔倒检测。
+- 沿途在 `src/wbc.py` 修了 3 处真实问题（都保留，各自使 self-test 仍 9/9 PASS）：
+  1. **stance 接触改软任务**：原硬等式 `J·qddot=−Jdot·qvel` 会与力矩限幅冲突→QP 频繁不可行→输出乱力矩炸飞；
+     改成高权重软任务后 qddot 自由、EoM 恒可解，`wbc_fail` 从数百降到 0。
+  2. **非最优解回退**：QP 非 optimal 时回退上一步力矩，不再下发 OSQP 的巨大乱值。
+  3. **任务加速度饱和**（`a_lin_max/a_ang_max/a_swing_max`）：强增益遇大误差时会索求爆炸力→launch；加 clip 后小误差仍刚、大误差被限。
+- `scripts/trot_demo.py` 里修了落脚点参考点：Raibert 原来以 hip 关节位置(y=±0.046)为参考→落脚过窄→侧向翻；
+  改用 base+yaw 旋转后的**名义足位**(y=±0.142)，恢复自然宽支撑。
+
+**结果 / 现状（真实跑出）**
+- ✅ 4 足站立：WBC-only 闭环 2s 漂移 0、max|pitch|0.17°。
+- ❌ 平地 trot：稳不住。典型 `python scripts/trot_demo.py --secs5 --vx0`：~1.0–1.4s 内 max|roll|→60° 摔倒；
+  在场景中 `wbc_fail=0`（可行性已解决）、无 launch（饱和已解决），失败模式是**纯控制**：2 对角支撑相里躯干慢翻。
+
+**根因诊断（关键，供下次/换方案参考）**
+- 隔离实验证明：即便**静态**只用 2 对角足站立（FL+RR），当前 WBC 也稳不住（~1–2s 翻到 30–160°），
+  加大姿态增益(kp_ori 到 9000)也没用 → 不是调参问题，是结构问题。
+- 机理：浮动基**无驱动**，其滚转力矩只能来自**接触力**；WBC 只能下发关节力矩 τ，接触力是 MuJoCo 被动涌现的。
+  4 足是稳定平衡（略偏差也不倒），2 对角是**不稳定平衡**，需要精确的力控来镇定，而 τ→实际接触力的映射（软接触）
+  达不到这个精度 → 反应式 WBC-base-PD 镇不住这个模态。MPC 开/关对比也证明当前 MPC 没能补上（no-MPC 同样翻）。
+
+**下一步（待用户拍板，见"待决策"）**：trot 镇定需要更强手段，候选：
+  (a) 让 **MPC 做主镇定**（预测式，horizon 内把不稳定模态压住）、WBC 主要**忠实跟踪 MPC 反力**而非自己做 base PD——
+      需要给 MPC 正确的 horizon 内落脚点/接触序列 + 调姿态权重；
+  (b) WBC 改**任务优先级/零空间投影**（接触>姿态>摆动）而非单 QP 软加权；
+  (c) 降低目标：先只交付"4 足站立 + 原地缓慢踏步/极慢 trot"的可视化，把 Phase 3 对比实验的基线换成站立抗扰。
 
 ### Phase 2③ - WBC 关节力矩 QP src/wbc.py 完成
 
