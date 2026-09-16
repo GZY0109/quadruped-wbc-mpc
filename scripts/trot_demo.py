@@ -140,6 +140,14 @@ def run_trot(
     if log_tau:
         log["tau"] = []
         log["contact"] = []
+        log["swing_pos_ref"] = []
+        log["swing_vel_ref"] = []
+        log["foot_pos"] = []
+        log["base_ang_vel"] = []
+        log["qdd"] = []
+        log["f_solved"] = []
+        log["tau_static"] = []
+        log["tau_dynamic"] = []
     frames = []
     frame_every = max(1, round((1.0 / video_fps) / dt))
 
@@ -232,6 +240,12 @@ def run_trot(
                 else:
                     swing_pos[i], swing_vel[i], swing_acc[i] = p, v, a
 
+        # snapshot pre-step actual state (paired with the references just
+        # computed above) for diagnostics -- `st` gets overwritten by sim.step
+        # below, so grab these before that happens.
+        foot_pos_pre = st.foot_pos.copy()
+        base_ang_vel_pre = st.base_ang_vel.copy()
+
         # --- force ramp for stance legs over force_ramp_time at touchdown and
         # liftoff, applied to the MPC force target fed into the WBC's (soft,
         # low-weight) force-tracking task -- avoids handing the WBC a step
@@ -267,6 +281,22 @@ def run_trot(
             log["wbc_fail"] += 1
         log["wbc_solve"].append(wbc_info["solve_time_ms"])
 
+        if log_tau:
+            # Decompose tau = St^T @ (M@qdd) [dynamic/inertial term] + St^T @
+            # (h - Jc^T@f) [static gravity+contact term], reusing the WBC's
+            # own internals (read-only, same EoM identity checked by
+            # eom_residual in wbc.py) -- must run before sim.step() mutates
+            # sim.data out from under the pre-step M/J/h used by this solve.
+            M_ = wbc._mass_matrix(sim.data)
+            J_ = wbc._foot_jacobians(sim.data)
+            Jc_ = J_.reshape(12, -1)
+            h_ = sim.data.qfrc_bias.copy()
+            f_ = wbc_info["f_solved"].reshape(-1)
+            tau_dynamic = wbc._St.T @ (M_ @ wbc_info["qdd"])
+            tau_static = wbc._St.T @ (h_ - Jc_.T @ f_)
+            log["tau_static"].append(tau_static)
+            log["tau_dynamic"].append(tau_dynamic)
+
         st = sim.step(tau)
 
         # --- logging ---
@@ -283,6 +313,12 @@ def run_trot(
         if log_tau:
             log["tau"].append(tau.copy())
             log["contact"].append(contact.copy())
+            log["swing_pos_ref"].append(swing_pos.copy())
+            log["swing_vel_ref"].append(swing_vel.copy())
+            log["foot_pos"].append(foot_pos_pre)
+            log["base_ang_vel"].append(base_ang_vel_pre)
+            log["qdd"].append(wbc_info["qdd"].copy())
+            log["f_solved"].append(wbc_info["f_solved"].copy())
 
         if video and k % frame_every == 0:
             frames.append(sim.render(width=640, height=480))
