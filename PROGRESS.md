@@ -12,14 +12,14 @@
 
 ## 当前状态
 
-`Phase 2 - 进行中（① 步态调度已完成，下一步 ② Convex MPC）`
+`Phase 2 - 进行中（①步态 + ②MPC 已完成，下一步 ③ WBC）`
 
 - Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py` 封装完成并通过站立 smoke test。
-- Phase 2 选型 ✅ 已拍板（2026-09-15，用户确认）：**方案 A —— 参考架构自实现（MuJoCo 原生，两层都用 OSQP）**。
+- Phase 2 选型 ✅ 已拍板（用户确认）：**方案 A —— 参考架构自实现（MuJoCo 原生，两层都用 OSQP）**。
   详见下方"待决策（已解决）"里的评估表。
-- Phase 2 ① ✅ 完成（2026-09-16）：`src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS，
-  出图 `results/gait_schedule.png`。
-- **下一步（Phase 2 步骤 ②）**：写 `src/mpc.py`（SRBD 13 维凸 MPC，OSQP）。
+- Phase 2 ① ✅ 完成：`src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS。
+- Phase 2 ② ✅ 完成：`src/mpc.py` —— SRBD 13 维凸 MPC（OSQP），self-test 11/11 PASS，warm-start ~0.8ms/solve。
+- **下一步（Phase 2 步骤 ③）**：写 `src/wbc.py`（关节力矩 QP，`mj_fullM`/`mj_jac`）。
 
 ### 重开 Pod / 新会话恢复工作的步骤（重要）
 
@@ -74,7 +74,28 @@ git log --oneline -10              # 核对代码进度与本文件一致
 
 ## 记录
 
-<!-- 格式：### YYYY-MM-DD Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么 -->
+<!-- 格式：### Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么（尽量不写日期，git 已有时间戳） -->
+
+### Phase 2② - Convex MPC src/mpc.py 完成
+
+**做了什么**
+- `src/mpc.py`：MIT Cheetah 3 凸 MPC（SRBD 13 维状态 [θ,p,ω,v,g]）。
+  - `ConvexMPC`：绕当前 yaw 线性化的连续 A/B → 一阶离散 Ad/Bd → 稠密 condense（决策变量只留各腿反力 U）；
+    代价 = 状态跟踪 Q + 力正则 R；约束 = 每足每步线性化摩擦锥（金字塔 4 面）+ 单边法向力 [f_min,f_max]，
+    swing 足 f_max=0 强制反力为 0。OSQP 求解，sparsity 不变时走 `update()` 热启动。
+  - `make_reference(...)`：由速度指令积分出 (N,13) 期望轨迹（躯干保持水平、指定高度）。
+  - `composite_inertia_from_model(...)`：从 MuJoCo 在 home 位形算全身质量/CoM/复合转动惯量（平行轴），
+    避免只用 trunk 惯量的粗糙近似。实测 mass=15.206kg，I_diag≈[0.170,0.484,0.535] kg·m²。
+- self-test（`python -m src.mpc`）11/11 PASS。
+
+**结果**（真实跑出）
+- 站立（4 足）：每足法向力 38.5–38.9N，Σfz=154.9N ≈ m·g(149.2N)，摩擦锥满足，左右平衡。
+- trot（FL+RR 支撑）：2 足各 ~76N 撑起 m·g，摆动足反力 <1e-2 N。
+- 前进指令 0.6m/s：净前向力 +59N（方向正确，用于加速）。
+- 热启动：复用同一 OSQP 实例，单次求解 ~0.8ms（40Hz 实时余量充足）。
+
+**下一步**：Phase 2 步骤 ③ `src/wbc.py`（关节力矩 QP：决策 [qddot,f,tau]，`mj_fullM`/`mj_jac`/`qfrc_bias`，
+浮动基 EoM 等式约束 + 摩擦锥/力矩限幅，跟踪 MPC 反力 + base 姿态 + 摆动足加速度）。
 
 ### 2026-09-16 Phase 2① - 步态调度 src/gait.py 完成
 
