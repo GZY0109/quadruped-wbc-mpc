@@ -91,6 +91,13 @@ def run_trot(
     # buffer after each touchdown before the next leg lifts. Pure gait-phase
     # change -- does not touch mpc.py or wbc.py.
     stance_overlap: float = 0.0,
+    # Candidate task-priority WBC (see PROGRESS.md): use
+    # WholeBodyController.solve_hierarchical() instead of the flat
+    # weighted-sum solve() -- strict priority (attitude+height > foot
+    # kinematics > force-tracking) instead of one weighted sum where every
+    # added objective competes with the existing tasks for the same weight
+    # budget. Default off so run_trot()'s established behavior is unchanged.
+    hierarchical: bool = False,
     video: bool = False,
     video_fps: int = 50,
     verbose: bool = True,
@@ -270,7 +277,8 @@ def run_trot(
         # Reverted to "yaw follows current" (no yaw feedback) since it measurably
         # performs better; kept as a documented negative result, not a fix.
         yaw_des = st.base_rpy[2]
-        tau, wbc_info = wbc.solve(
+        wbc_solve = wbc.solve_hierarchical if hierarchical else wbc.solve
+        tau, wbc_info = wbc_solve(
             sim.data, mpc_forces_wbc, contact,
             base_pos_des=base_pos_des, base_vel_des=vel_cmd,
             base_rpy_des=np.array([0.0, 0.0, yaw_des]),

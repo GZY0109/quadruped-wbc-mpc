@@ -146,6 +146,13 @@ class WholeBodyController:
         self._pattern: tuple | None = None
         self._last_tau = np.zeros(N_JOINTS)    # fallback on a failed solve
         self.last_info: dict = {}
+        # separate cached OSQP problem/pattern per stage of solve_hierarchical(),
+        # so each stage keeps its own warm-start across ticks instead of
+        # thrashing against solve()'s single slot (whose sparsity pattern
+        # differs from any one hierarchy stage).
+        self._hprobs: dict[str, osqp.OSQP] = {}
+        self._hpatterns: dict[str, tuple] = {}
+        self._last_tau_h = np.zeros(N_JOINTS)
 
     # -------------------------------------------------------- dynamics reads
     def _mass_matrix(self, data) -> np.ndarray:
@@ -425,6 +432,238 @@ class WholeBodyController:
         if res.x is None or np.any(np.isnan(res.x)):
             return np.zeros(N_DEC)
         return res.x
+
+    def _solve_osqp_slot(self, slot: str, P_sp, q, A_sp, l, u) -> np.ndarray:
+        """Same as _solve_osqp but keeps its own cached problem/pattern under
+        ``slot`` -- lets solve_hierarchical()'s three stages each warm-start
+        independently across ticks instead of sharing (and invalidating) one
+        cache slot with each other or with solve().
+        """
+        pattern = (P_sp.indptr.tobytes(), P_sp.indices.tobytes(),
+                   A_sp.indptr.tobytes(), A_sp.indices.tobytes(),
+                   A_sp.shape)
+        prob = self._hprobs.get(slot)
+        if prob is None or self._hpatterns.get(slot) != pattern:
+            prob = osqp.OSQP()
+            prob.setup(P=P_sp, q=q, A=A_sp, l=l, u=u, verbose=False,
+                       warm_starting=True, eps_abs=1e-5, eps_rel=1e-5,
+                       max_iter=4000, polish=True)
+            self._hprobs[slot] = prob
+            self._hpatterns[slot] = pattern
+        else:
+            prob.update(Px=P_sp.data, Ax=A_sp.data, q=q, l=l, u=u)
+        res = prob.solve()
+        info = {
+            "status": res.info.status,
+            "status_val": int(res.info.status_val),
+            "iter": int(res.info.iter),
+            "solve_time_ms": float(res.info.solve_time) * 1e3,
+        }
+        x = np.zeros(N_DEC) if (res.x is None or np.any(np.isnan(res.x))) else res.x
+        return x, info
+
+    # ------------------------------------------------------ hierarchical solve
+    def solve_hierarchical(
+        self,
+        data,
+        mpc_forces: np.ndarray,
+        contact: np.ndarray,
+        *,
+        base_pos_des: np.ndarray,
+        base_vel_des: np.ndarray,
+        base_rpy_des: np.ndarray,
+        base_omega_des: np.ndarray,
+        swing_pos_ref: np.ndarray | None = None,
+        swing_vel_ref: np.ndarray | None = None,
+        swing_acc_ref: np.ndarray | None = None,
+        # Tolerance bands for locking a higher-priority stage's achieved task
+        # value into the next stage's constraints. Tighter values sound more
+        # "correct" but starve OSQP: the 42-dim QP hits its iteration cap
+        # inside a narrow band (observed as wbc_fail from "maximum iterations
+        # reached", not genuine infeasibility) instead of converging. These
+        # defaults are the values that empirically got walk-in-place from a
+        # guaranteed 3.82s fall to a clean 10s survival (see PROGRESS.md);
+        # eps 5x tighter than this measurably regressed it.
+        eps_ori: float = 0.5,
+        eps_pos: float = 0.2,
+        eps_foot: float = 2.0,
+    ) -> tuple[np.ndarray, dict]:
+        """Strict task-priority variant of :meth:`solve`.
+
+        ``solve()`` puts every task in one weighted-sum QP, so any task can be
+        diluted by whichever other tasks are large at that instant -- no
+        priority is *guaranteed*, only *likely* if its weight happens to
+        dominate. Diagnosed in PROGRESS.md as the reason five different
+        weight-tuning candidates all failed the same way (a new objective
+        either loses to the existing strong attitude task with no effect, or
+        wins and degrades it).
+
+        This solves three QPs in sequence instead of one, using the same hard
+        constraints (EoM, swing-force=0, friction cone, torque box) at every
+        stage:
+
+          P1: base orientation + height        (the "must not fall" tasks)
+          P2: stance no-slip + swing tracking   (the "feet do their job" tasks)
+          P3: force tracking + regularization   (the "nice to have" tasks)
+
+        Each stage after the first is additionally constrained to keep the
+        previous stage(s)' achieved task value within a small tolerance
+        (``eps_*``) of what that stage found optimal -- so P2/P3 can use
+        whatever redundancy is left over, but can never trade away P1's (or
+        P1+P2's) achieved accuracy for their own objective, unlike the single
+        weighted-sum QP where that trade is exactly what a large secondary
+        weight forces.
+        """
+        mpc_forces = np.asarray(mpc_forces, dtype=float).reshape(N_LEGS, 3)
+        contact = np.asarray(contact, dtype=bool).reshape(N_LEGS)
+        gns = self.g
+
+        M = self._mass_matrix(data)
+        h = data.qfrc_bias.copy()
+        J = self._foot_jacobians(data)
+        bias = self._foot_acc_bias(data, J)
+        qvel = data.qvel.copy()
+
+        p = data.qpos[0:3].copy()
+        v = qvel[0:3].copy()
+        omega = qvel[3:6].copy()
+        R = quat_to_rotmat(data.qpos[3:7])
+
+        # ---------- hard constraints (identical to solve(), shared by every stage) ----------
+        Jc = J.reshape(N_LEGS * 3, NV)
+        A_rows: list[np.ndarray] = []
+        l_rows: list[np.ndarray] = []
+        u_rows: list[np.ndarray] = []
+
+        A_eom = np.zeros((NV, N_DEC))
+        A_eom[:, QDD] = M
+        A_eom[:, FRC] = -Jc.T
+        A_eom[:, TAU] = -self._St
+        A_rows.append(A_eom); l_rows.append(-h); u_rows.append(-h)
+
+        BIG = 1e6
+        for i in range(N_LEGS):
+            if not contact[i]:
+                A_z = np.zeros((3, N_DEC))
+                A_z[:, NV + 3 * i:NV + 3 * i + 3] = np.eye(3)
+                A_rows.append(A_z); l_rows.append(np.zeros(3)); u_rows.append(np.zeros(3))
+
+        cone = np.array([
+            [1.0, 0.0, -self.mu], [-1.0, 0.0, -self.mu],
+            [0.0, 1.0, -self.mu], [0.0, -1.0, -self.mu],
+        ])
+        for i in range(N_LEGS):
+            if contact[i]:
+                cols = slice(NV + 3 * i, NV + 3 * i + 3)
+                A_c = np.zeros((4, N_DEC)); A_c[:, cols] = cone
+                A_rows.append(A_c); l_rows.append(np.full(4, -BIG)); u_rows.append(np.zeros(4))
+                A_n = np.zeros((1, N_DEC)); A_n[0, NV + 3 * i + 2] = 1.0
+                A_rows.append(A_n)
+                l_rows.append(np.array([self.f_min])); u_rows.append(np.array([self.f_max]))
+
+        A_t = np.zeros((N_JOINTS, N_DEC)); A_t[:, TAU] = np.eye(N_JOINTS)
+        A_rows.append(A_t)
+        l_rows.append(self.torque_limits[:, 0]); u_rows.append(self.torque_limits[:, 1])
+
+        hard_A, hard_l, hard_u = list(A_rows), list(l_rows), list(u_rows)
+
+        def lock_row(A_task: np.ndarray, achieved: np.ndarray, eps: float) -> None:
+            A_rows.append(A_task)
+            l_rows.append(achieved - eps)
+            u_rows.append(achieved + eps)
+
+        def solve_stage(slot: str, P: np.ndarray, q: np.ndarray):
+            P[np.diag_indices_from(P)] += 1e-9
+            P_sp = sp.triu(sp.csc_matrix(P), format="csc")
+            A_sp = sp.csc_matrix(np.vstack(A_rows))
+            l = np.concatenate(l_rows)
+            u = np.concatenate(u_rows)
+            return self._solve_osqp_slot(slot, P_sp, q, A_sp, l, u)
+
+        def add_task(P, q, A, b, w):
+            P += 2.0 * w * (A.T @ A)
+            q += -2.0 * w * (A.T @ b)
+
+        # ---------- Stage 1: base orientation + height ----------
+        R_des = _rpy_to_rotmat(base_rpy_des)
+        e_ori = _so3_log(R.T @ R_des)
+        a_ang = (np.asarray(gns.kp_ori) * e_ori
+                 + np.asarray(gns.kd_ori) * (np.asarray(base_omega_des) - omega))
+        a_ang = np.clip(a_ang, -gns.a_ang_max, gns.a_ang_max)
+        A_ori = np.zeros((3, N_DEC)); A_ori[:, 3:6] = np.eye(3)
+
+        a_lin = (np.asarray(gns.kp_pos) * (np.asarray(base_pos_des) - p)
+                 + np.asarray(gns.kd_pos) * (np.asarray(base_vel_des) - v))
+        a_lin = np.clip(a_lin, -gns.a_lin_max, gns.a_lin_max)
+        A_pos = np.zeros((3, N_DEC)); A_pos[:, 0:3] = np.eye(3)
+
+        P1 = np.zeros((N_DEC, N_DEC)); q1 = np.zeros(N_DEC)
+        add_task(P1, q1, A_ori, a_ang, gns.w_ori)
+        add_task(P1, q1, A_pos, a_lin, gns.w_pos)
+        x1, info1 = solve_stage("s1", P1, q1)
+
+        # ---------- Stage 2: stance no-slip + swing tracking, locking stage 1 ----------
+        A_rows, l_rows, u_rows = list(hard_A), list(hard_l), list(hard_u)
+        lock_row(A_ori, A_ori @ x1, eps_ori)
+        lock_row(A_pos, A_pos @ x1, eps_pos)
+
+        P2 = np.zeros((N_DEC, N_DEC)); q2 = np.zeros(N_DEC)
+        foot_tasks = []   # (A, b, w) for locking into stage 3
+        for i in range(N_LEGS):
+            A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
+            if contact[i]:
+                A_task, b_task, w_task = A_foot, -bias[i], gns.w_contact
+            else:
+                foot_v = J[i] @ qvel
+                pref = swing_pos_ref[i] if swing_pos_ref is not None else np.zeros(3)
+                vref = swing_vel_ref[i] if swing_vel_ref is not None else np.zeros(3)
+                aref = swing_acc_ref[i] if swing_acc_ref is not None else np.zeros(3)
+                foot_p = data.site_xpos[self.foot_site_ids[i]].copy()
+                a_des = (aref + gns.kp_swing * (pref - foot_p)
+                         + gns.kd_swing * (vref - foot_v))
+                a_des = np.clip(a_des, -gns.a_swing_max, gns.a_swing_max)
+                A_swing = A_foot.copy(); A_swing[:, 0:6] = 0.0
+                A_task, b_task, w_task = A_swing, a_des - bias[i], gns.w_swing
+            add_task(P2, q2, A_task, b_task, w_task)
+            foot_tasks.append((A_task, b_task))
+        x2, info2 = solve_stage("s2", P2, q2)
+
+        # ---------- Stage 3: force tracking + regularization, locking stages 1-2 ----------
+        A_rows, l_rows, u_rows = list(hard_A), list(hard_l), list(hard_u)
+        lock_row(A_ori, A_ori @ x1, eps_ori)
+        lock_row(A_pos, A_pos @ x1, eps_pos)
+        for A_task, _b in foot_tasks:
+            lock_row(A_task, A_task @ x2, eps_foot)
+
+        P3 = np.zeros((N_DEC, N_DEC)); q3 = np.zeros(N_DEC)
+        for i in range(N_LEGS):
+            if contact[i]:
+                A_f = np.zeros((3, N_DEC))
+                A_f[:, NV + 3 * i:NV + 3 * i + 3] = np.eye(3)
+                add_task(P3, q3, A_f, mpc_forces[i], gns.w_force)
+        reg = np.zeros(N_DEC)
+        reg[QDD] = gns.w_reg_qdd; reg[FRC] = gns.w_reg_f; reg[TAU] = gns.w_reg_tau
+        P3[np.diag_indices_from(P3)] += 2.0 * reg
+        x3, info3 = solve_stage("s3", P3, q3)
+
+        tau = x3[TAU].copy()
+        solved = info3["status_val"] in (1, 2) and info2["status_val"] in (1, 2) \
+            and info1["status_val"] in (1, 2)
+        if not solved:
+            tau = self._last_tau_h.copy()
+        else:
+            self._last_tau_h = tau.copy()
+
+        f = x3[FRC].reshape(N_LEGS, 3)
+        eom_res = float(np.linalg.norm(M @ x3[QDD] + h - self._St @ tau - Jc.T @ x3[FRC]))
+        info = dict(info3)
+        info.update(status=info3["status"], status_val=info3["status_val"] if solved else 0,
+                    stage1_status=info1["status"], stage2_status=info2["status"],
+                    eom_residual=eom_res,
+                    force_track_err=float(np.linalg.norm((f - mpc_forces)[contact]))
+                    if contact.any() else 0.0,
+                    qdd=x3[QDD].copy(), f_solved=f.copy())
+        return tau, info
 
 
 # ------------------------------------------------------------------ helpers
