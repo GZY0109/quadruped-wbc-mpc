@@ -8,20 +8,32 @@ floating-base dynamics, contact/friction constraints and actuator limits.
 
 QP (decision x = [qddot(18), f(12), tau(12)], 42 vars):
 
-  minimize   sum_k w_k * || A_k qddot(+f) - b_k ||^2   (task-space tracking)
-  subject to
+  subject to (P0, always hard):
     M qddot + h = S^T tau + Jc^T f            (floating-base EoM, 18 eq)
     f_i = 0            for swing feet          (no force off-ground)
     |f_x|,|f_y| <= mu f_z,  f_min <= f_z <= f_max   for stance feet (friction)
     tau_min <= tau <= tau_max                 (actuator limits)
 
-Tasks (weighted least squares in the cost):
-  * base orientation  -> desired body-frame angular acceleration (PD on attitude)
-  * base position     -> desired world linear acceleration (PD on height + vel)
-  * swing feet        -> Cartesian acceleration tracking the gait reference
-  * stance feet       -> zero acceleration (soft no-slip)
-  * contact force     -> track the MPC reaction forces
-  * regularization    -> small penalty on qddot / f / tau for a well-posed QP
+Tasks are solved as a strict priority hierarchy (task-priority / hierarchical
+QP), not a single flat weighted sum:
+
+  Level 1 (highest): stance no-slip     -- planted feet must not accelerate.
+  Level 2:           base attitude + height PD.
+  Level 3 (lowest):  swing-foot tracking + MPC force tracking + regularization
+                     (a weighted sum *within* this level is fine -- these are
+                     the "nice to have" tasks, none of which should be allowed
+                     to steal capacity from level 1/2).
+
+Each level is solved as its own QP subject to P0 plus an equality constraint
+freezing every higher-priority level's already-achieved task value (a standard
+sequential-QP formulation of task-priority WBC). This replaces an earlier flat
+weighted-sum formulation that turned out to be fragile at multi-contact
+transitions: when a leg's own actuators saturated during swing, a single QP
+could satisfy the swing task "for free" by accelerating the *base* instead
+(same cost, since a leg Jacobian has nonzero base columns), launching the
+trunk every time a leg lifted off. Strict priority prevents a lower-priority
+task from ever trading away a higher-priority one's optimum, which a flat
+weighted sum cannot guarantee no matter how the weights are tuned.
 
 Dynamics quantities come straight from MuJoCo: mass matrix ``mj_fullM``, bias
 force ``data.qfrc_bias`` (Coriolis + gravity), and foot Jacobians ``mj_jacSite``.
@@ -134,8 +146,10 @@ class WholeBodyController:
             self._St[dof, j] = 1.0
 
         self._scratch = mujoco.MjData(model)   # for Jdot*qvel finite differencing
-        self._prob: osqp.OSQP | None = None
-        self._pattern: tuple | None = None
+        # One cached OSQP instance + sparsity pattern per hierarchy level (1,2,3)
+        # so each level still gets warm-started tick-to-tick.
+        self._prob: dict[int, osqp.OSQP] = {}
+        self._pattern: dict[int, tuple] = {}
         self._last_tau = np.zeros(N_JOINTS)    # fallback on a failed solve
         self.last_info: dict = {}
 
@@ -189,7 +203,7 @@ class WholeBodyController:
         swing_vel_ref: np.ndarray | None = None,
         swing_acc_ref: np.ndarray | None = None,
     ) -> tuple[np.ndarray, dict]:
-        """Solve the WBC QP and return 12 joint torques.
+        """Solve the WBC task hierarchy and return 12 joint torques.
 
         Parameters
         ----------
@@ -212,7 +226,6 @@ class WholeBodyController:
         -------
         (tau, info): tau is (12,) joint torques; info has solver status + residuals.
         """
-        m = self.model
         mpc_forces = np.asarray(mpc_forces, dtype=float).reshape(N_LEGS, 3)
         contact = np.asarray(contact, dtype=bool).reshape(N_LEGS)
 
@@ -228,44 +241,47 @@ class WholeBodyController:
         omega = qvel[3:6].copy()                     # body angular vel
         R = quat_to_rotmat(data.qpos[3:7])           # body->world
 
-        # ---------- assemble weighted-least-squares cost ----------
-        P = np.zeros((N_DEC, N_DEC))
-        q = np.zeros(N_DEC)
-
-        def add_task(A: np.ndarray, b: np.ndarray, w: float) -> None:
-            # w * ||A x - b||^2  ->  P += 2w A^T A ; q += -2w A^T b
-            nonlocal P, q
-            P += 2.0 * w * (A.T @ A)
-            q += -2.0 * w * (A.T @ b)
-
         gns = self.g
 
-        # base orientation task (body frame): qddot[3:6] = a_ang_des
+        # ---------- P0: hard constraints, shared by every priority level ----------
+        Acon0, l0, u0 = self._hard_constraints(M, h, J, contact)
+
+        # ---------- Level 1: stance no-slip ----------
+        stance_idx = [i for i in range(N_LEGS) if contact[i]]
+        extra_eq: list[tuple[np.ndarray, np.ndarray]] = []
+        level_status = []
+        if stance_idx:
+            A1 = np.zeros((3 * len(stance_idx), N_DEC))
+            b1 = np.zeros(3 * len(stance_idx))
+            for row, i in enumerate(stance_idx):
+                A1[3 * row:3 * row + 3, QDD] = J[i]
+                b1[3 * row:3 * row + 3] = -bias[i]
+            x1, ok1, info1 = self._solve_level(1, Acon0, l0, u0, [(A1, b1, 1.0)], [])
+            level_status.append(info1["status_val"])
+            if ok1:
+                extra_eq.append((A1, A1 @ x1))
+
+        # ---------- Level 2: base attitude + height ----------
         R_des = _rpy_to_rotmat(base_rpy_des)
         e_ori = _so3_log(R.T @ R_des)                # body-frame attitude error
         a_ang = (np.asarray(gns.kp_ori) * e_ori
                  + np.asarray(gns.kd_ori) * (np.asarray(base_omega_des) - omega))
         a_ang = np.clip(a_ang, -gns.a_ang_max, gns.a_ang_max)
-        A_ori = np.zeros((3, N_DEC)); A_ori[:, 3:6] = np.eye(3)
-        add_task(A_ori, a_ang, gns.w_ori)
-
-        # base position task (world): qddot[0:3] = a_lin_des
         a_lin = (np.asarray(gns.kp_pos) * (np.asarray(base_pos_des) - p)
                  + np.asarray(gns.kd_pos) * (np.asarray(base_vel_des) - v))
         a_lin = np.clip(a_lin, -gns.a_lin_max, gns.a_lin_max)
-        A_pos = np.zeros((3, N_DEC)); A_pos[:, 0:3] = np.eye(3)
-        add_task(A_pos, a_lin, gns.w_pos)
+        A2 = np.zeros((6, N_DEC)); b2 = np.zeros(6)
+        A2[0:3, 3:6] = np.eye(3) * np.sqrt(gns.w_ori); b2[0:3] = a_ang * np.sqrt(gns.w_ori)
+        A2[3:6, 0:3] = np.eye(3) * np.sqrt(gns.w_pos); b2[3:6] = a_lin * np.sqrt(gns.w_pos)
+        x2, ok2, info2 = self._solve_level(2, Acon0, l0, u0, [(A2, b2, 1.0)], extra_eq)
+        level_status.append(info2["status_val"])
+        if ok2:
+            extra_eq.append((A2, A2 @ x2))
 
-        # per-foot Cartesian acceleration tasks: swing feet track the gait
-        # reference; stance feet target zero acceleration (soft no-slip).
+        # ---------- Level 3 (lowest): swing tracking + force tracking + reg ----------
+        level3_tasks: list[tuple[np.ndarray, np.ndarray, float]] = []
         for i in range(N_LEGS):
-            A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
-            if contact[i]:
-                # Stance no-slip legitimately depends on base motion (a moving
-                # base drags a planted foot with it unless the leg compensates),
-                # so this task keeps the full Jacobian including base columns.
-                add_task(A_foot, -bias[i], gns.w_contact)
-            else:
+            if not contact[i]:
                 foot_v = J[i] @ qvel
                 pref = swing_pos_ref[i] if swing_pos_ref is not None else np.zeros(3)
                 vref = swing_vel_ref[i] if swing_vel_ref is not None else np.zeros(3)
@@ -276,32 +292,62 @@ class WholeBodyController:
                 a_des = np.clip(a_des, -gns.a_swing_max, gns.a_swing_max)
                 # Decouple from the base: a leg's foot Jacobian has nonzero
                 # columns in both the base (0:6) and that leg's own 3 joints,
-                # so a weighted-sum QP can "cheat" on a torque-limited swing
-                # task by accelerating the BASE instead of the leg (raising the
-                # trunk raises the foot just as well, in the cost's eyes). That
-                # is exactly what was observed integrating the trot demo: the
-                # instant a leg swung, the trunk launched upward for the
-                # duration of the swing. Zeroing the base columns here forces
-                # the swing task to only use that leg's own joint accelerations.
-                A_swing = A_foot.copy(); A_swing[:, 0:6] = 0.0
-                add_task(A_swing, a_des - bias[i], gns.w_swing)
-
-        # contact force tracking (stance feet only)
-        for i in range(N_LEGS):
-            if contact[i]:
+                # so without this a lower-priority swing task could still try
+                # to "cheat" via the base within its own level (though the
+                # attitude/height task is already frozen above it by then, this
+                # keeps the swing task's own qddot cost from wasting weight on
+                # a direction that level 2 has already locked down).
+                A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
+                A_foot[:, 0:6] = 0.0
+                level3_tasks.append((A_foot, a_des - bias[i], gns.w_swing))
+            else:
                 A_f = np.zeros((3, N_DEC))
                 A_f[:, NV + 3 * i:NV + 3 * i + 3] = np.eye(3)
-                add_task(A_f, mpc_forces[i], gns.w_force)
+                level3_tasks.append((A_f, mpc_forces[i], gns.w_force))
+        # regularization (only at the final level -- a tie-breaker among
+        # otherwise-equivalent solutions, not something that should compete
+        # with any actual task).
+        A_reg = np.eye(N_DEC)
+        b_reg = np.zeros(N_DEC)
+        reg_w = np.zeros(N_DEC)
+        reg_w[QDD] = gns.w_reg_qdd
+        reg_w[FRC] = gns.w_reg_f
+        reg_w[TAU] = gns.w_reg_tau
+        level3_tasks.append((A_reg, b_reg, reg_w))  # per-row weight vector
 
-        # regularization
-        reg = np.zeros(N_DEC)
-        reg[QDD] = gns.w_reg_qdd
-        reg[FRC] = gns.w_reg_f
-        reg[TAU] = gns.w_reg_tau
-        P[np.diag_indices_from(P)] += 2.0 * reg
-        P[np.diag_indices_from(P)] += 1e-9   # PD safety
+        x3, ok3, info3 = self._solve_level(3, Acon0, l0, u0, level3_tasks, extra_eq)
+        level_status.append(info3["status_val"])
 
-        # ---------- constraints ----------
+        qdd = x3[QDD]
+        f = x3[FRC].reshape(N_LEGS, 3)
+        tau = x3[TAU].copy()
+
+        # Guard: if the final level's QP was not solved to optimality, don't
+        # command garbage (OSQP returns large arbitrary values when
+        # infeasible). Hold the last good torque instead.
+        if not ok3:
+            tau = self._last_tau.copy()
+        else:
+            self._last_tau = tau.copy()
+
+        # residuals for diagnostics
+        Jc = J.reshape(N_LEGS * 3, NV)
+        eom_res = float(np.linalg.norm(M @ qdd + h - self._St @ tau - Jc.T @ x3[FRC]))
+        info = dict(info3)
+        info.update(eom_residual=eom_res,
+                    level_status=level_status,
+                    force_track_err=float(np.linalg.norm((f - mpc_forces)[contact]))
+                    if contact.any() else 0.0)
+        return tau, info
+
+    # ------------------------------------------------------------- hierarchy
+    def _hard_constraints(
+        self, M: np.ndarray, h: np.ndarray, J: np.ndarray, contact: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """P0: EoM equality + swing f=0 + stance friction/normal + torque box.
+
+        Shared, unchanged, across all three priority levels for a given tick.
+        """
         A_rows: list[np.ndarray] = []
         l_rows: list[np.ndarray] = []
         u_rows: list[np.ndarray] = []
@@ -314,8 +360,9 @@ class WholeBodyController:
         A_eom[:, TAU] = -self._St
         A_rows.append(A_eom); l_rows.append(-h); u_rows.append(-h)
 
-        # (2) swing feet: f_i = 0 (no force off the ground). Stance no-slip is a
-        #     soft task (above), keeping qddot free so the EoM stays satisfiable.
+        # (2) swing feet: f_i = 0 (no force off the ground). Stance no-slip is
+        #     the level-1 priority task, not a hard constraint here, so qddot
+        #     stays free enough that the EoM is always satisfiable.
         BIG = 1e6
         for i in range(N_LEGS):
             if not contact[i]:
@@ -345,58 +392,83 @@ class WholeBodyController:
         A_rows.append(A_t)
         l_rows.append(self.torque_limits[:, 0]); u_rows.append(self.torque_limits[:, 1])
 
+        return np.vstack(A_rows), np.concatenate(l_rows), np.concatenate(u_rows)
+
+    def _solve_level(
+        self,
+        level: int,
+        Acon0: np.ndarray, l0: np.ndarray, u0: np.ndarray,
+        tasks: list[tuple[np.ndarray, np.ndarray, float | np.ndarray]],
+        extra_eq: list[tuple[np.ndarray, np.ndarray]],
+    ) -> tuple[np.ndarray, bool, dict]:
+        """Solve one priority level: minimize the weighted task(s) subject to P0
+        plus equality constraints freezing every higher-priority level's
+        already-achieved value (``extra_eq``). Returns (x, solved_ok, info).
+
+        Each task's weight ``w`` may be a scalar (uniform weight on that task's
+        rows) or a per-decision-variable vector matching ``A``'s row count
+        (used for the level-3 regularization task, whose rows are one per
+        decision variable with different weights for qddot/f/tau).
+        """
+        P = np.zeros((N_DEC, N_DEC))
+        q = np.zeros(N_DEC)
+        for A, b, w in tasks:
+            if np.isscalar(w):
+                P += 2.0 * w * (A.T @ A)
+                q += -2.0 * w * (A.T @ b)
+            else:
+                w = np.asarray(w)
+                Wa = w[:, None] * A   # diag(w) @ A
+                P += 2.0 * (A.T @ Wa)
+                q += -2.0 * (A.T @ (w * b))
+        P[np.diag_indices_from(P)] += 1e-8  # numerical conditioning only
+
+        A_rows = [Acon0]; l_rows = [l0]; u_rows = [u0]
+        for A_prev, e_prev in extra_eq:
+            tol = np.maximum(1e-4, 1e-3 * np.abs(e_prev))
+            A_rows.append(A_prev)
+            l_rows.append(e_prev - tol)
+            u_rows.append(e_prev + tol)
         A_con = np.vstack(A_rows)
         l = np.concatenate(l_rows)
         u = np.concatenate(u_rows)
 
-        # ---------- solve ----------
         P_sp = sp.triu(sp.csc_matrix(P), format="csc")
         A_sp = sp.csc_matrix(A_con)
-        x = self._solve_osqp(P_sp, q, A_sp, l, u)
+        x, info = self._solve_osqp(level, P_sp, q, A_sp, l, u)
+        ok = info["status_val"] in (1, 2)
+        return x, ok, info
 
-        qdd = x[QDD]
-        f = x[FRC].reshape(N_LEGS, 3)
-        tau = x[TAU].copy()
-
-        # Guard: if the QP was not solved to optimality, don't command garbage
-        # (OSQP returns large arbitrary values when infeasible). Hold the last
-        # good torque instead.
-        solved = self.last_info.get("status_val") in (1, 2)  # optimal / inaccurate
-        if not solved:
-            tau = self._last_tau.copy()
-        else:
-            self._last_tau = tau.copy()
-
-        # residuals for diagnostics
-        eom_res = float(np.linalg.norm(M @ qdd + h - self._St @ tau - Jc.T @ x[FRC]))
-        info = dict(self.last_info)
-        info.update(eom_residual=eom_res,
-                    force_track_err=float(np.linalg.norm((f - mpc_forces)[contact]))
-                    if contact.any() else 0.0)
-        return tau, info
-
-    def _solve_osqp(self, P_sp, q, A_sp, l, u) -> np.ndarray:
+    def _solve_osqp(
+        self, level: int, P_sp, q, A_sp, l, u
+    ) -> tuple[np.ndarray, dict]:
+        """Solve one level's QP, warm-started via a cached OSQP instance kept
+        per priority level (level 1/2/3 each get their own persisted problem +
+        sparsity-pattern cache across ticks, since their constraint counts
+        differ from each other but are usually stable tick-to-tick).
+        """
         pattern = (P_sp.indptr.tobytes(), P_sp.indices.tobytes(),
                    A_sp.indptr.tobytes(), A_sp.indices.tobytes(),
                    A_sp.shape)
-        if self._prob is None or pattern != self._pattern:
-            self._prob = osqp.OSQP()
-            self._prob.setup(P=P_sp, q=q, A=A_sp, l=l, u=u, verbose=False,
-                             warm_starting=True, eps_abs=1e-5, eps_rel=1e-5,
-                             max_iter=4000, polish=True)
-            self._pattern = pattern
+        if level not in self._prob or pattern != self._pattern.get(level):
+            prob = osqp.OSQP()
+            prob.setup(P=P_sp, q=q, A=A_sp, l=l, u=u, verbose=False,
+                      warm_starting=True, eps_abs=1e-5, eps_rel=1e-5,
+                      max_iter=4000, polish=True)
+            self._prob[level] = prob
+            self._pattern[level] = pattern
         else:
-            self._prob.update(Px=P_sp.data, Ax=A_sp.data, q=q, l=l, u=u)
-        res = self._prob.solve()
-        self.last_info = {
+            self._prob[level].update(Px=P_sp.data, Ax=A_sp.data, q=q, l=l, u=u)
+        res = self._prob[level].solve()
+        info = {
             "status": res.info.status,
             "status_val": int(res.info.status_val),
             "iter": int(res.info.iter),
             "solve_time_ms": float(res.info.solve_time) * 1e3,
         }
         if res.x is None or np.any(np.isnan(res.x)):
-            return np.zeros(N_DEC)
-        return res.x
+            return np.zeros(N_DEC), info
+        return res.x, info
 
 
 # ------------------------------------------------------------------ helpers
