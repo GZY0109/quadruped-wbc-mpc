@@ -48,18 +48,27 @@ git log --oneline -10              # 核对代码进度与本文件一致
 
 然后读本文件"当前状态"+"Phase 2 实现计划"，从上次断点接着做。
 
-## 待决策
+### 下次会话（新 Pod）从这里接着做
 
-## 待决策
+用户已经拍板：**继续打磨分层QP，目标是把 trot（period=0.4）和有前进速度的 walk（vx=0.3）也跑通**，
+不是先定格收尾。具体从这几件事接着做（见下方 Phase 2④ 记录里的完整数据）：
 
-- **[待决策 - Phase 2④ 分层QP 突破后，下一步打磨方向] `solve_hierarchical()` 已经让 walk 原地踏步
-  稳定撑满 10s（此前必摔在 3.82s），是这一整轮里第一个真正跑赢基线的方案，验证了"单层加权和 QP 缺任务
-  优先级"这个结论是对的、分层QP是正确的结构性修复。但还没完全打磨好：① `wbc_fail` 仍偏高（~100+/5000
-  拍是"max iterations reached"而非真正不可行，大概率是锁定约束的容差 `eps_ori/eps_pos/eps_foot`
-  或 OSQP 迭代上限还没调好）；② trot（period=0.4）1.73s 摔、有前进速度的 walk（vx=0.3）1.67s 摔，
-  还没受益；③ `rms(roll,pitch)≈37°/30°`说明存活但晃得厉害，不是干净稳定的步态。详见下方 Phase 2④
-  最新记录的完整数据。**需要用户拍板**：继续打磨（降 wbc_fail、把 trot/前进 walk 也跑通、把晃动幅度
-  压下去），还是先把 walk 原地踏步这个真实的正向结果定格下来（出视频、写复盘），再看要不要继续投入。
+1. `bash scripts/setup_env.sh && python scripts/stand_test.py` 确认环境，`git log --oneline -10` 核对。
+2. 复现两个已知基准：
+   - `run_trot(gait_name="walk", gait_period=0.8, step_height=0.05, vx=0, hierarchical=True)` 应该
+     稳定撑满（≥10s 不摔，`max_roll` 不越过 60°）——这是已验证的正向结果，改动前务必先复现一遍确认环境对。
+   - `run_trot(gait_name="trot", gait_period=0.4, step_height=0.08, vx=0, hierarchical=True)` 当前
+     1.73s 摔（`wbc_fail=136`）；`run_trot(gait_name="walk", ..., vx=0.3, hierarchical=True)` 当前
+     1.67s 摔（`wbc_fail=61`）——这两个是今天要接着攻的。
+3. 大概率切入点：`solve_hierarchical()` 的锁定容差 `eps_ori/eps_pos/eps_foot`（当前默认
+   `0.5/0.2/2.0`，是针对"原地踏步 walk"调出来的）很可能需要针对 trot 的更快切换节奏、以及前进 walk 的
+   额外速度跟踪需求重新调；也可能需要检查 trot 的对角双支撑切换模式是不是跟分层QP的三级顺序有新的
+   冲突模式（跟 walk 不同，trot 是同拍两条腿一起切，可能需要专门看一次）。
+4. 是否会很快：**不确定，如实说**——walk 原地踏步这次能被一次分层QP改动直接解决，是因为它命中的正是
+   我们已经诊断清楚的那个具体机制（同拍单腿切换、纠偏力矩无法分摊）。trot 是完全不同的动力学节奏
+   （duty=0.5、更快周期、对角双腿同拍切换），没有专门针对它诊断过，前进 walk 也引入了新的动态
+   （Raibert 落脚点跟踪、速度误差项）——分层QP这个结构性修复大概率还是有用，但具体的容差/细节可能需要
+   重新摸一轮，不能假设直接复用现有参数就行。
 
 ## 待决策（已解决）
 
