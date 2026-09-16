@@ -11,6 +11,28 @@ The MPC runs at a lower rate (its forces are held between updates); the WBC and
 physics run every 2 ms. Foothold targets come from the Raibert heuristic, and
 each swing foot follows a cycloid arc from its lift-off point to that target.
 
+Contact-transition smoothing
+-----------------------------
+Debugging showed that walking instability consistently occurred at the exact
+same event -- a leg's stance/swing state flipping -- regardless of which WBC
+QP formulation was tried (flat weighted-sum, task-priority hierarchy, bounded
+slack). That pointed at the *interface* between gait/MPC/WBC, not the WBC's
+math, so two synchronization gaps are addressed here instead of in wbc.py:
+
+  1. MPC event-triggered replan: the MPC normally only replans on its own
+     ~30ms clock, so for up to one MPC cycle after a contact change the WBC's
+     force-tracking task is fed a *stale* force distribution (e.g. still
+     allocating weight to a leg that just started swinging). Now a contact
+     change immediately triggers an out-of-cycle MPC solve.
+  2. Swing-reference blending: instead of jumping straight to the full swing
+     trajectory the instant a leg is marked swinging (a step discontinuity in
+     the *target*, even though the trajectory itself -- see src/gait.py's
+     minimum-jerk profile -- has zero velocity/acceleration at its own
+     endpoint), the position/velocity/acceleration reference is blended from
+     "stay where the foot currently is" up to the full trajectory over
+     ``swing_ramp_time``. This absorbs any small mismatch between the
+     scheduled liftoff instant and the leg's actual physical state.
+
 Run:  python scripts/trot_demo.py [--secs 5] [--vx 0.4] [--video]
 Prints a metrics summary and (with --video) writes results/trot_demo.mp4.
 """
@@ -46,6 +68,16 @@ def run_trot(
     stand_time: float = 0.5,
     wbc_gains=None,
     mpc_weights=None,
+    swing_ramp_time: float = 0.03,
+    force_ramp_time: float = 0.03,
+    # Default OFF: tested as a fix for the walk gait's instability (see
+    # PROGRESS.md) and, contrary to the hypothesis, made things measurably
+    # WORSE than doing nothing across every ramp duration tried (0.005-0.03s)
+    # -- kept as opt-in experiments, not the default path, so run_trot()'s
+    # default behavior stays the verified ~3.82s walk-in-place baseline.
+    use_event_mpc: bool = False,
+    use_swing_ramp: bool = False,
+    use_force_ramp: bool = False,
     video: bool = False,
     video_fps: int = 50,
     verbose: bool = True,
@@ -85,7 +117,8 @@ def run_trot(
     # logs
     T = int(secs / dt)
     log = dict(t=[], h=[], roll=[], pitch=[], yaw=[], vx=[], vy=[],
-               n_contact=[], mpc_solve=[], wbc_solve=[], wbc_fail=0)
+               n_contact=[], mpc_solve=[], wbc_solve=[], wbc_fail=0,
+               foot_force=[], mpc_force=[])
     frames = []
     frame_every = max(1, round((1.0 / video_fps) / dt))
 
@@ -104,9 +137,17 @@ def run_trot(
             gs = gait.eval(tg)
             contact = gs.contact
             swing_phase = gs.swing_phase
+            stance_phase = gs.stance_phase
         else:
             contact = np.ones(4, dtype=bool)         # stand: all feet down
             swing_phase = np.zeros(4)
+            stance_phase = np.zeros(4)
+
+        # Any leg's stance/swing flag flipping since the last tick immediately
+        # invalidates the MPC's last force allocation (e.g. it may still be
+        # assigning weight to a leg that just started swinging) -- trigger an
+        # out-of-cycle replan rather than waiting up to one full mpc_dt.
+        contact_changed = walking and use_event_mpc and not np.array_equal(contact, prev_contact)
 
         # --- foothold planning on stance->swing transitions ---
         for i in range(4):
@@ -124,8 +165,8 @@ def run_trot(
                 )
         prev_contact = contact.copy()
 
-        # --- MPC at its lower rate ---
-        if k % mpc_every == 0:
+        # --- MPC: periodic clock OR immediately on a contact-schedule change ---
+        if k % mpc_every == 0 or contact_changed:
             x0 = np.zeros(13)
             x0[0:3] = st.base_rpy
             x0[3:6] = st.base_pos
@@ -142,17 +183,46 @@ def run_trot(
             )
             log["mpc_solve"].append(mpc_info["solve_time_ms"])
 
-        # --- swing-foot references ---
+        # --- swing-foot references, blended in over swing_ramp_time ---
+        # Jumping straight to the full trajectory the instant a leg is marked
+        # "swinging" is itself a step in the *target* even though the
+        # trajectory's own endpoint is smooth (zero vel/accel, see
+        # src/gait.py). Blending the reference from "stay at the foot's
+        # current actual position" up to the full trajectory absorbs any
+        # small mismatch between the scheduled liftoff instant and the leg's
+        # true physical state at that instant.
         swing_pos = st.foot_pos.copy()
         swing_vel = np.zeros((4, 3))
         swing_acc = np.zeros((4, 3))
+        sw_ramp_frac = (min(1.0, swing_ramp_time / gait.swing_duration)
+                       if gait.swing_duration > 0 else 1.0)
         for i in range(4):
             if not contact[i]:
                 p, v, a = swing_foot_reference(
                     swing_phase[i], swing_start[i], foothold[i],
                     step_height, gait.swing_duration,
                 )
-                swing_pos[i], swing_vel[i], swing_acc[i] = p, v, a
+                if use_swing_ramp:
+                    blend = min(1.0, swing_phase[i] / sw_ramp_frac) if sw_ramp_frac > 0 else 1.0
+                    actual_p = st.foot_pos[i]
+                    swing_pos[i] = actual_p + blend * (p - actual_p)
+                    swing_vel[i] = blend * v
+                    swing_acc[i] = blend * a
+                else:
+                    swing_pos[i], swing_vel[i], swing_acc[i] = p, v, a
+
+        # --- force ramp for stance legs over force_ramp_time at touchdown and
+        # liftoff, applied to the MPC force target fed into the WBC's (soft,
+        # low-weight) force-tracking task -- avoids handing the WBC a step
+        # change in target force right at a contact transition. ---
+        force_scale = np.ones(4)
+        if use_force_ramp and walking and gait.stance_duration > 0:
+            fr_ramp_frac = min(1.0, force_ramp_time / gait.stance_duration)
+            for i in range(4):
+                if contact[i]:
+                    sp_i = stance_phase[i]
+                    force_scale[i] = min(1.0, sp_i / fr_ramp_frac, (1.0 - sp_i) / fr_ramp_frac)
+        mpc_forces_wbc = mpc_forces * force_scale[:, None]
 
         # --- WBC -> torques ---
         base_pos_des = np.array([st.base_pos[0], st.base_pos[1], walk_height])
@@ -166,7 +236,7 @@ def run_trot(
         # performs better; kept as a documented negative result, not a fix.
         yaw_des = st.base_rpy[2]
         tau, wbc_info = wbc.solve(
-            sim.data, mpc_forces, contact,
+            sim.data, mpc_forces_wbc, contact,
             base_pos_des=base_pos_des, base_vel_des=vel_cmd,
             base_rpy_des=np.array([0.0, 0.0, yaw_des]),
             base_omega_des=np.array([0.0, 0.0, yr_cmd]),
@@ -187,6 +257,8 @@ def run_trot(
         log["vx"].append(st.base_lin_vel[0])
         log["vy"].append(st.base_lin_vel[1])
         log["n_contact"].append(int(contact.sum()))
+        log["foot_force"].append(st.foot_force.copy())     # measured, sensor-based
+        log["mpc_force"].append(mpc_forces[:, 2].copy())   # MPC-commanded vertical force
 
         if video and k % frame_every == 0:
             frames.append(sim.render(width=640, height=480))

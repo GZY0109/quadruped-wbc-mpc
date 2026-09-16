@@ -372,7 +372,12 @@ class WholeBodyController:
         info = dict(self.last_info)
         info.update(eom_residual=eom_res,
                     force_track_err=float(np.linalg.norm((f - mpc_forces)[contact]))
-                    if contact.any() else 0.0)
+                    if contact.any() else 0.0,
+                    # read-only exposure of the solved qddot/contact-force for
+                    # offline diagnostics (e.g. splitting tau into a static
+                    # gravity/contact term vs a M@qddot dynamic-correction
+                    # term) -- does not change any solve behavior.
+                    qdd=qdd.copy(), f_solved=f.copy())
         return tau, info
 
     def _solve_osqp(self, P_sp, q, A_sp, l, u) -> np.ndarray:
