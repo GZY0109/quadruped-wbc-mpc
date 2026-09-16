@@ -37,6 +37,7 @@ def run_trot(
     vx: float = 0.4,
     vy: float = 0.0,
     yaw_rate: float = 0.0,
+    gait_name: str = "trot",
     gait_period: float = 0.4,
     step_height: float = 0.08,
     mpc_dt: float = 0.03,
@@ -44,6 +45,7 @@ def run_trot(
     ramp: float = 1.0,
     stand_time: float = 0.5,
     wbc_gains=None,
+    mpc_weights=None,
     video: bool = False,
     video_fps: int = 50,
     verbose: bool = True,
@@ -55,8 +57,9 @@ def run_trot(
 
     mass, com0, inertia = composite_inertia_from_model(sim.model, sim.data)
 
-    gait = GaitScheduler("trot", period=gait_period)
-    mpc = ConvexMPC(mass, inertia, dt=mpc_dt, horizon=mpc_horizon, mu=0.6)
+    gait = GaitScheduler(gait_name, period=gait_period)
+    mpc = ConvexMPC(mass, inertia, dt=mpc_dt, horizon=mpc_horizon, mu=0.6,
+                    weights=mpc_weights)
     wbc = WholeBodyController(
         sim.model, sim.foot_site_ids, sim.joint_qvel_adr, sim.torque_limits, mu=0.6,
         gains=wbc_gains,
