@@ -41,4 +41,4 @@ python scripts/stand_test.py --video   # 另存 results/stand_test.mp4
 
 ## 复现结果摘要
 
-<!-- Claude 在 Phase 3 完成后填写：不同地形/扰动下的姿态跟踪误差、成功率对比表 -->
+<!-- Phase 3 完成后填写：不同地形/扰动下的姿态跟踪误差、成功率对比表 -->
