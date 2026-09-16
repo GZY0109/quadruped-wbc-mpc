@@ -88,6 +88,14 @@ class WBCGains:
     w_contact: float = 300.0   # soft stance no-slip (kept soft so qddot stays
                                # free to satisfy the EoM -> QP stays feasible)
     w_force: float = 1.0       # track MPC reaction forces (soft preference)
+    # penalize each stance leg's vertical force deviating from the mean
+    # vertical force across current stance legs -- default off (0.0), tested
+    # as a candidate fix for the finding that the flat weighted-sum QP
+    # concentrates transient correction force on whichever leg just landed
+    # instead of spreading it across all available stance legs (see
+    # PROGRESS.md, Phase 2(4) deep-dive). Not RL: a deterministic quadratic
+    # term solved analytically every tick like every other task here.
+    w_loadshare: float = 0.0
     # regularization
     w_reg_qdd: float = 1e-3
     w_reg_f: float = 1e-4
@@ -292,6 +300,21 @@ class WholeBodyController:
                 A_f = np.zeros((3, N_DEC))
                 A_f[:, NV + 3 * i:NV + 3 * i + 3] = np.eye(3)
                 add_task(A_f, mpc_forces[i], gns.w_force)
+
+        # load-sharing: penalize each stance leg's vertical force deviating
+        # from the mean vertical force across current stance legs, so a
+        # transient correction can't be dumped entirely on one leg while
+        # others sit idle (see gains docstring).
+        stance_idx = np.flatnonzero(contact)
+        if gns.w_loadshare > 0.0 and stance_idx.size > 1:
+            k = stance_idx.size
+            A_share = np.zeros((k, N_DEC))
+            for row, i in enumerate(stance_idx):
+                A_share[row, NV + 3 * i + 2] += 1.0 - 1.0 / k
+                for j in stance_idx:
+                    if j != i:
+                        A_share[row, NV + 3 * j + 2] -= 1.0 / k
+            add_task(A_share, np.zeros(k), gns.w_loadshare)
 
         # regularization
         reg = np.zeros(N_DEC)
