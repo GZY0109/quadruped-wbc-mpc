@@ -49,7 +49,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.sim_env import Go2Sim, LEGS, quat_to_rotmat
-from src.gait import GaitScheduler, raibert_foothold, swing_foot_reference
+from src.gait import GAIT_PRESETS, GaitScheduler, raibert_foothold, swing_foot_reference
 from src.mpc import ConvexMPC, make_reference, composite_inertia_from_model, GRAVITY
 from src.wbc import WholeBodyController
 
@@ -78,9 +78,23 @@ def run_trot(
     use_event_mpc: bool = False,
     use_swing_ramp: bool = False,
     use_force_ramp: bool = False,
+    # Stance-overlap fix (candidate (b) in PROGRESS.md): the walk gait's
+    # offsets/duty=0.75 make every handoff a same-tick event -- leg A's
+    # touchdown lands on the exact same instant as leg B's liftoff (verified
+    # analytically: liftoff_B = offset_B + duty = offset_A = touchdown_A for
+    # the walk preset's offsets). That leaves the just-landed leg to absorb
+    # its attitude-correction torque transient with one fewer stance leg to
+    # share load with, right as it's already at its softest (zero built-up
+    # contact stiffness). Bumping duty by stance_overlap/period delays every
+    # leg's liftoff by stance_overlap seconds while leaving touchdown timing
+    # (still purely offset-driven) untouched, inserting a brief 4-foot-stance
+    # buffer after each touchdown before the next leg lifts. Pure gait-phase
+    # change -- does not touch mpc.py or wbc.py.
+    stance_overlap: float = 0.0,
     video: bool = False,
     video_fps: int = 50,
     verbose: bool = True,
+    log_tau: bool = False,
 ):
     sim = Go2Sim(control_dt=0.002)
     st = sim.reset()
@@ -89,7 +103,11 @@ def run_trot(
 
     mass, com0, inertia = composite_inertia_from_model(sim.model, sim.data)
 
-    gait = GaitScheduler(gait_name, period=gait_period)
+    gait_duty = None
+    if stance_overlap > 0:
+        base_duty = GAIT_PRESETS[gait_name]["duty"]
+        gait_duty = min(1.0, base_duty + stance_overlap / gait_period)
+    gait = GaitScheduler(gait_name, period=gait_period, duty=gait_duty)
     mpc = ConvexMPC(mass, inertia, dt=mpc_dt, horizon=mpc_horizon, mu=0.6,
                     weights=mpc_weights)
     wbc = WholeBodyController(
@@ -119,6 +137,9 @@ def run_trot(
     log = dict(t=[], h=[], roll=[], pitch=[], yaw=[], vx=[], vy=[],
                n_contact=[], mpc_solve=[], wbc_solve=[], wbc_fail=0,
                foot_force=[], mpc_force=[])
+    if log_tau:
+        log["tau"] = []
+        log["contact"] = []
     frames = []
     frame_every = max(1, round((1.0 / video_fps) / dt))
 
@@ -259,6 +280,9 @@ def run_trot(
         log["n_contact"].append(int(contact.sum()))
         log["foot_force"].append(st.foot_force.copy())     # measured, sensor-based
         log["mpc_force"].append(mpc_forces[:, 2].copy())   # MPC-commanded vertical force
+        if log_tau:
+            log["tau"].append(tau.copy())
+            log["contact"].append(contact.copy())
 
         if video and k % frame_every == 0:
             frames.append(sim.render(width=640, height=480))
@@ -318,11 +342,16 @@ def main():
     ap.add_argument("--yaw_rate", type=float, default=0.0)
     ap.add_argument("--period", type=float, default=0.4)
     ap.add_argument("--step_height", type=float, default=0.08)
+    ap.add_argument("--gait", type=str, default="trot")
+    ap.add_argument("--overlap", type=float, default=0.0,
+                     help="stance-overlap fix: delay each leg's liftoff by this many "
+                          "seconds after the preceding leg's touchdown (see run_trot)")
     ap.add_argument("--video", action="store_true")
     args = ap.parse_args()
     print(f"=== trot demo: vx={args.vx} period={args.period} step_h={args.step_height} ===")
     run_trot(secs=args.secs, vx=args.vx, vy=args.vy, yaw_rate=args.yaw_rate,
-             gait_period=args.period, step_height=args.step_height, video=args.video)
+             gait_name=args.gait, gait_period=args.period, step_height=args.step_height,
+             stance_overlap=args.overlap, video=args.video)
 
 
 if __name__ == "__main__":
