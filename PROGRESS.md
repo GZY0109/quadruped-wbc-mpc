@@ -12,14 +12,15 @@
 
 ## 当前状态
 
-`Phase 2 - 进行中（①步态 + ②MPC 已完成，下一步 ③ WBC）`
+`Phase 2 - 进行中（①步态 ②MPC ③WBC 已完成，下一步 ④ 集成 trot 回路）`
 
 - Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py` 封装完成并通过站立 smoke test。
 - Phase 2 选型 ✅ 已拍板（用户确认）：**方案 A —— 参考架构自实现（MuJoCo 原生，两层都用 OSQP）**。
-  详见下方"待决策（已解决）"里的评估表。
-- Phase 2 ① ✅ 完成：`src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS。
-- Phase 2 ② ✅ 完成：`src/mpc.py` —— SRBD 13 维凸 MPC（OSQP），self-test 11/11 PASS，warm-start ~0.8ms/solve。
-- **下一步（Phase 2 步骤 ③）**：写 `src/wbc.py`（关节力矩 QP，`mj_fullM`/`mj_jac`）。
+- Phase 2 ① ✅ `src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS。
+- Phase 2 ② ✅ `src/mpc.py` —— SRBD 13 维凸 MPC（OSQP），11/11 PASS，warm-start ~0.8ms/solve。
+- Phase 2 ③ ✅ `src/wbc.py` —— 关节力矩 QP（42 维，`mj_fullM`/`mj_jacSite`/`qfrc_bias`），9/9 PASS，
+  闭环 WBC-only 站立 2s 稳定（漂移 0、max|pitch| 0.17°），~0.2ms/solve。
+- **下一步（Phase 2 步骤 ④）**：`scripts/trot_demo.py` 集成 MPC(低频)+WBC(高频)+摆动腿，平地 trot 跑通出视频。
 
 ### 重开 Pod / 新会话恢复工作的步骤（重要）
 
@@ -75,6 +76,28 @@ git log --oneline -10              # 核对代码进度与本文件一致
 ## 记录
 
 <!-- 格式：### Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么（尽量不写日期，git 已有时间戳） -->
+
+### Phase 2③ - WBC 关节力矩 QP src/wbc.py 完成
+
+**做了什么**
+- `src/wbc.py`：全身控制力矩 QP（决策 42 维 = qddot(18)+f(12)+tau(12)）。
+  - 动力学量全走 MuJoCo：`mj_fullM`（质量矩阵）、`mj_jacSite`（足端雅可比）、`data.qfrc_bias`（科氏+重力）。
+    `Jdot·qvel` 偏置项用 scratch MjData 有限差分（免去 cacc/重力约定坑）。
+  - 硬约束：浮动基 EoM 等式；stance 足硬接触无滑移 `J·qddot=−Jdot·qvel`；swing 足反力=0；
+    stance 足摩擦锥金字塔 + 单边法向力；关节力矩限幅。
+  - 软任务（加权最小二乘）：base 姿态（机体系角加速度 PD）、base 高度（世界系，x/y 位置不跟踪只跟速度）、
+    swing 足笛卡尔加速度跟踪、跟踪 MPC 反力、正则。OSQP 求解 + warm-start，非最优解回退上一步力矩。
+  - 关键调参教训：base 姿态/高度任务权重必须**远大于**力跟踪/正则（≈近似硬任务），否则被稀释、
+    躯干像倒立摆一样翻掉；弱增益反而不稳。最终 w_ori=1000/w_pos=500，kp_ori=(2000,2000,800)。
+- self-test（`python -m src.wbc`）9/9 PASS。
+
+**结果**（真实跑出）
+- 站立单次解：EoM 残差 5e-15，跟踪 MPC 反力误差 0.31N，|tau|max=5.9Nm，求解 ~0.2ms。
+- 闭环 WBC-only 站立 2s：末态高度 27.0cm（=home），漂移 0.00cm，max|roll|=0.00°，max|pitch|=0.17°，
+  1000 步 0 次求解失败。（对照：默认弱增益初版会在 ~0.2s 内翻倒，据此定位到权重/增益问题。）
+- trot 单腿摆动工况：求解最优，EoM 残差 1.45e-6（在 OSQP 容差内），|tau|max=12.9Nm。
+
+**下一步**：Phase 2 步骤 ④ `scripts/trot_demo.py`——把 gait+MPC(~40Hz)+WBC(500Hz) 串成闭环，平地 trot 调参跑通出视频。
 
 ### Phase 2② - Convex MPC src/mpc.py 完成
 
