@@ -12,12 +12,14 @@
 
 ## 当前状态
 
-`Phase 2 - 进行中（选型已定，尚未写控制器代码）`
+`Phase 2 - 进行中（① 步态调度已完成，下一步 ② Convex MPC）`
 
 - Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py` 封装完成并通过站立 smoke test。
 - Phase 2 选型 ✅ 已拍板（2026-09-15，用户确认）：**方案 A —— 参考架构自实现（MuJoCo 原生，两层都用 OSQP）**。
   详见下方"待决策（已解决）"里的评估表。
-- **下一步（Phase 2 首个编码里程碑）**：按下方"Phase 2 实现计划"从步骤 ① 开始写 `src/gait.py` → `src/mpc.py` → `src/wbc.py`。
+- Phase 2 ① ✅ 完成（2026-09-16）：`src/gait.py` —— trot 相位调度 + Raibert 落脚点 + 摆线摆动轨迹，self-test 全 PASS，
+  出图 `results/gait_schedule.png`。
+- **下一步（Phase 2 步骤 ②）**：写 `src/mpc.py`（SRBD 13 维凸 MPC，OSQP）。
 
 ### 重开 Pod / 新会话恢复工作的步骤（重要）
 
@@ -73,6 +75,28 @@ git log --oneline -10              # 核对代码进度与本文件一致
 ## 记录
 
 <!-- 格式：### YYYY-MM-DD Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么 -->
+
+### 2026-09-16 Phase 2① - 步态调度 src/gait.py 完成
+
+**做了什么**
+- 新会话恢复：pod 重启后 pip/apt 依赖丢失，`bash scripts/setup_env.sh` 重装（mujoco 3.13.0 / osqp 1.1.3），
+  `python scripts/stand_test.py` 复跑 RESULT: PASS，git log 与本文件一致（3 commits，无需更正）。
+- `src/gait.py`（纯 numpy，controller-agnostic）：
+  - `GaitScheduler`：归一化周期时钟 + 每腿 offset/duty 拆 stance/swing 相位；含 trot/stand/walk/pace/bound 预设；
+    `eval(t)` 出接触旗标+分段相位，`contact_sequence(t,H,dt)` 给 MPC 预测时域出 (H,4) 接触表。
+  - `raibert_foothold(...)`：MIT Cheetah 3 落脚点 = hip + (T_stance/2)·v_actual + √(h/g)·(v−v_cmd)（neutral point + capture point）。
+  - `swing_foot_reference(...)`：水平摆线插值 + 竖直抬腿 raised-cosine bell，返回 pos/vel/acc（供 WBC 摆动足加速度跟踪）。
+- self-test（`python src/gait.py`）13 项断言全 PASS，出图 `results/gait_schedule.png`。
+
+**结果**（真实跑出）
+- trot 对角腿同相（FL==RR、FR==RL），反相对角，占空比每腿 0.500，任意时刻恰好 2 足触地。
+- 摆动轨迹端点严格落在 lift-off/touchdown、端点竖直速度=0、中点抬腿高度=step_height（0.08m 实测 0.0800）。
+- Raibert：静止零指令时落脚点在 hip 正下方；稳态前进 v=v_cmd=0.5m/s 时落脚点前探 T/2·v=0.0625m；
+  v<v_cmd 时落脚点后移（capture 反馈方向正确）。
+- 修正过程记录：初版 neutral point 误用 v_cmd，改为 MIT 标准的 actual velocity，并把测试断言从"前进指令即前探"
+  纠正为物理正确的"稳态才前探、加速阶段后移"。
+
+**下一步**：Phase 2 步骤 ② `src/mpc.py`（SRBD 13 维凸 MPC，OSQP 稀疏求解，质量/惯量从 MuJoCo 读）。
 
 ### 2026-09-15 Phase 2 - 开源实现选型完成，定方案 A（参考架构自实现）
 
