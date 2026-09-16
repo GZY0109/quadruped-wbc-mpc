@@ -260,9 +260,11 @@ def swing_foot_reference(
     """Cartesian swing-foot reference (position, velocity, acceleration).
 
     Horizontal motion is a cycloid from ``p_lift`` to ``p_touchdown``. Vertical
-    motion is the same cycloid baseline plus a raised-cosine "bell" of amplitude
-    ``step_height`` that peaks at mid-swing and returns to the interpolated
-    endpoint height, giving zero vertical velocity at lift-off and touchdown.
+    motion is the same cycloid baseline plus a minimum-jerk clearance bump of
+    amplitude ``step_height`` that peaks at mid-swing and returns to the
+    interpolated endpoint height, with zero vertical *velocity and
+    acceleration* at lift-off and touchdown (see the note in the body about
+    why acceleration continuity matters here).
 
     Parameters
     ----------
@@ -294,14 +296,21 @@ def swing_foot_reference(
     vel = dc * delta * inv_T
     acc = ddc * delta * inv_T * inv_T
 
-    # Vertical clearance bell: h/2 * (1 - cos(2*pi*s)) -> 0 at ends, peak h at s=0.5.
-    two_pi = 2.0 * np.pi
-    bell = 0.5 * step_height * (1.0 - np.cos(two_pi * s))
-    bell_d = 0.5 * step_height * two_pi * np.sin(two_pi * s)
-    bell_dd = 0.5 * step_height * two_pi * two_pi * np.cos(two_pi * s)
-    pos[2] += bell
-    vel[2] += bell_d * inv_T
-    acc[2] += bell_dd * inv_T * inv_T
+    # Vertical clearance profile: minimum-jerk bump 64*s^3*(1-s)^3, peak 1 at
+    # s=0.5. Unlike a raised cosine (0.5*(1-cos(2*pi*s))), this has ZERO
+    # acceleration at both endpoints (triple root of s and (1-s) each kill two
+    # derivatives), not just zero velocity. A raised-cosine bell has *maximum*
+    # acceleration exactly at liftoff/touchdown (s=0/1) -- verified in the
+    # integrated demo (scripts/trot_demo.py) to command a violent "kick" into
+    # the ground at the swing-phase transition (foot commanded a ~4g vertical
+    # accel the instant it starts swinging), spiking measured contact force to
+    # >5x body weight and launching the trunk. This profile removes that spike.
+    bump = 64.0 * s**3 * (1.0 - s) ** 3
+    bump_d = 192.0 * s**2 * (1.0 - s) ** 2 * (1.0 - 2.0 * s)
+    bump_dd = 384.0 * s * (1.0 - s) * ((1.0 - 2.0 * s) ** 2 - s * (1.0 - s))
+    pos[2] += step_height * bump
+    vel[2] += step_height * bump_d * inv_T
+    acc[2] += step_height * bump_dd * inv_T * inv_T
 
     return pos, vel, acc
 
@@ -368,13 +377,16 @@ def _self_test() -> bool:
     p1 = np.array([0.28, 0.15, 0.0])
     h = 0.08
     Tsw = sched.swing_duration
-    pos0, vel0, _ = swing_foot_reference(0.0, p0, p1, h, Tsw)
-    pos1, vel1, _ = swing_foot_reference(1.0, p0, p1, h, Tsw)
+    pos0, vel0, acc0 = swing_foot_reference(0.0, p0, p1, h, Tsw)
+    pos1, vel1, acc1 = swing_foot_reference(1.0, p0, p1, h, Tsw)
     posm, _, _ = swing_foot_reference(0.5, p0, p1, h, Tsw)
     check("swing starts at lift-off point", bool(np.allclose(pos0, p0, atol=1e-9)))
     check("swing ends at touchdown point", bool(np.allclose(pos1, p1, atol=1e-9)))
     check("swing zero vertical velocity at endpoints",
           bool(abs(vel0[2]) < 1e-9 and abs(vel1[2]) < 1e-9))
+    check("swing zero vertical acceleration at endpoints "
+          f"(got {acc0[2]:.4f}, {acc1[2]:.4f})",
+          bool(abs(acc0[2]) < 1e-6 and abs(acc1[2]) < 1e-6))
     check(f"swing clearance ~step_height at mid (got {posm[2]:.4f})",
           bool(abs(posm[2] - h) < 1e-6))
 

@@ -261,6 +261,9 @@ class WholeBodyController:
         for i in range(N_LEGS):
             A_foot = np.zeros((3, N_DEC)); A_foot[:, QDD] = J[i]
             if contact[i]:
+                # Stance no-slip legitimately depends on base motion (a moving
+                # base drags a planted foot with it unless the leg compensates),
+                # so this task keeps the full Jacobian including base columns.
                 add_task(A_foot, -bias[i], gns.w_contact)
             else:
                 foot_v = J[i] @ qvel
@@ -271,7 +274,17 @@ class WholeBodyController:
                 a_des = (aref + gns.kp_swing * (pref - foot_p)
                          + gns.kd_swing * (vref - foot_v))
                 a_des = np.clip(a_des, -gns.a_swing_max, gns.a_swing_max)
-                add_task(A_foot, a_des - bias[i], gns.w_swing)
+                # Decouple from the base: a leg's foot Jacobian has nonzero
+                # columns in both the base (0:6) and that leg's own 3 joints,
+                # so a weighted-sum QP can "cheat" on a torque-limited swing
+                # task by accelerating the BASE instead of the leg (raising the
+                # trunk raises the foot just as well, in the cost's eyes). That
+                # is exactly what was observed integrating the trot demo: the
+                # instant a leg swung, the trunk launched upward for the
+                # duration of the swing. Zeroing the base columns here forces
+                # the swing task to only use that leg's own joint accelerations.
+                A_swing = A_foot.copy(); A_swing[:, 0:6] = 0.0
+                add_task(A_swing, a_des - bias[i], gns.w_swing)
 
         # contact force tracking (stance feet only)
         for i in range(N_LEGS):

@@ -156,7 +156,15 @@ def run_trot(
 
         # --- WBC -> torques ---
         base_pos_des = np.array([st.base_pos[0], st.base_pos[1], walk_height])
-        yaw_des = st.base_rpy[2]     # let yaw follow (no yaw command here)
+        # NOTE: tried tracking an explicit integrated yaw reference here (to
+        # fix an observed yaw drift of 30+ deg during a walk run) but it made
+        # things WORSE empirically (fall at 1.6s instead of 3.8s) -- forcing a
+        # fixed yaw target adds a competing torque demand on the same actuators
+        # already fighting to correct roll/pitch and swing the lifted leg,
+        # apparently making the coupled system harder to stabilize, not easier.
+        # Reverted to "yaw follows current" (no yaw feedback) since it measurably
+        # performs better; kept as a documented negative result, not a fix.
+        yaw_des = st.base_rpy[2]
         tau, wbc_info = wbc.solve(
             sim.data, mpc_forces, contact,
             base_pos_des=base_pos_des, base_vel_des=vel_cmd,
