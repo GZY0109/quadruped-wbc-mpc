@@ -120,10 +120,16 @@ def run_trot(
     # variants under assets/unitree_go2/ to test the controller's (flat-
     # ground-assuming) friction-cone/foothold logic under terrain mismatch.
     scene_path=None,
+    # Spawn-pose pre-tilt/raise, threaded to Go2Sim.reset() -- see its
+    # docstring. Only meaningful for non-flat scene_path (terrain eval);
+    # left at 0 by every other caller so default behavior is unchanged.
+    base_pitch: float = 0.0,
+    z_offset: float = 0.0,
 ):
     sim = Go2Sim(control_dt=0.002, **({"scene_path": scene_path} if scene_path else {}))
     st = sim.reset(add_noise=init_noise_seed is not None, seed=init_noise_seed,
-                   noise_amplitude=init_noise_amplitude)
+                   noise_amplitude=init_noise_amplitude,
+                   base_pitch=base_pitch, z_offset=z_offset)
     dt = sim.control_dt
     walk_height = float(st.base_pos[2])          # hold the home trunk height
 

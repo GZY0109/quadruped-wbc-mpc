@@ -167,6 +167,8 @@ class Go2Sim:
         add_noise: bool = False,
         seed: int | None = None,
         noise_amplitude: float = 0.05,
+        base_pitch: float = 0.0,
+        z_offset: float = 0.0,
     ) -> RobotState:
         """Reset to a keyframe (default the ``home`` standing pose) and return state.
 
@@ -179,6 +181,14 @@ class Go2Sim:
         per-joint perturbation range [rad] (default 0.05 matches the value
         that was previously hardcoded here, so existing callers/benchmarks
         are unaffected); Phase 3's disturbance-amplitude sweep varies it.
+
+        ``base_pitch``/``z_offset`` let a caller spawn the (still flat-ground
+        ``home`` keyframe) pose pre-tilted/raised -- used by Phase 3's terrain
+        eval to seat the robot on a sloped floor without the naive flat-pose
+        reset leaving two feet dangling in the air (the slope's ground drops
+        below the flat-keyframe assumption on the downhill side). Joint
+        angles are left at their home values; only the base orientation/
+        height are adjusted, then physics + controller settle from there.
         """
         if keyframe is not None and self.home_key_id >= 0:
             kid = (
@@ -189,6 +199,13 @@ class Go2Sim:
             mujoco.mj_resetDataKeyframe(self.model, self.data, kid)
         else:
             mujoco.mj_resetData(self.model, self.data)
+        if base_pitch != 0.0:
+            # pure y-axis rotation quaternion (w,x,y,z), composed onto the
+            # keyframe's identity base orientation.
+            half = base_pitch / 2.0
+            self.data.qpos[3:7] = np.array([np.cos(half), 0.0, np.sin(half), 0.0])
+        if z_offset != 0.0:
+            self.data.qpos[2] += z_offset
         if add_noise and noise_amplitude > 0:
             rng = np.random.default_rng(seed) if seed is not None else np.random
             self.data.qpos[self.joint_qpos_adr] += rng.uniform(
