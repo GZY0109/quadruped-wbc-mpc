@@ -166,6 +166,7 @@ class Go2Sim:
         keyframe: str | None = "home",
         add_noise: bool = False,
         seed: int | None = None,
+        noise_amplitude: float = 0.05,
     ) -> RobotState:
         """Reset to a keyframe (default the ``home`` standing pose) and return state.
 
@@ -174,7 +175,10 @@ class Go2Sim:
         reproduce exactly (used for multi-trial statistics across a marginally
         stable controller, where floating-point-level differences between
         environment/library versions have been observed to shift outcomes by
-        seconds -- see PROGRESS.md).
+        seconds -- see PROGRESS.md). ``noise_amplitude`` is the uniform
+        per-joint perturbation range [rad] (default 0.05 matches the value
+        that was previously hardcoded here, so existing callers/benchmarks
+        are unaffected); Phase 3's disturbance-amplitude sweep varies it.
         """
         if keyframe is not None and self.home_key_id >= 0:
             kid = (
@@ -185,9 +189,11 @@ class Go2Sim:
             mujoco.mj_resetDataKeyframe(self.model, self.data, kid)
         else:
             mujoco.mj_resetData(self.model, self.data)
-        if add_noise:
+        if add_noise and noise_amplitude > 0:
             rng = np.random.default_rng(seed) if seed is not None else np.random
-            self.data.qpos[self.joint_qpos_adr] += rng.uniform(-0.05, 0.05, size=12)
+            self.data.qpos[self.joint_qpos_adr] += rng.uniform(
+                -noise_amplitude, noise_amplitude, size=12
+            )
         mujoco.mj_forward(self.model, self.data)
         return self.get_state()
 

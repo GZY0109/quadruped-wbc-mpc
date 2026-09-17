@@ -109,9 +109,21 @@ def run_trot(
     # seconds between library-version reinstalls, so a single seed=None run
     # is not a reliable basis for judging whether a parameter change helped.
     init_noise_seed: int | None = None,
+    # Uniform per-joint init perturbation range [rad]; default matches the
+    # value that used to be hardcoded in Go2Sim.reset(). Phase 3's
+    # disturbance-amplitude sweep (scripts/disturbance_sweep.py) varies this
+    # to trace out survival-rate-vs-amplitude curves instead of relying on
+    # this one fixed point.
+    init_noise_amplitude: float = 0.05,
+    # MJCF scene to load (defaults to the flat-ground scene). Phase 3's
+    # terrain eval (scripts/terrain_eval.py) points this at the slope/rough
+    # variants under assets/unitree_go2/ to test the controller's (flat-
+    # ground-assuming) friction-cone/foothold logic under terrain mismatch.
+    scene_path=None,
 ):
-    sim = Go2Sim(control_dt=0.002)
-    st = sim.reset(add_noise=init_noise_seed is not None, seed=init_noise_seed)
+    sim = Go2Sim(control_dt=0.002, **({"scene_path": scene_path} if scene_path else {}))
+    st = sim.reset(add_noise=init_noise_seed is not None, seed=init_noise_seed,
+                   noise_amplitude=init_noise_amplitude)
     dt = sim.control_dt
     walk_height = float(st.base_pos[2])          # hold the home trunk height
 
