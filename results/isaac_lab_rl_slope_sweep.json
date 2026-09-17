@@ -1,0 +1,114 @@
+{
+ "n_seeds": 5,
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "vx_cmd": 0.3,
+ "noise_amplitude": 0.0,
+ "checkpoint": "logs/rsl_rl/unitree_go2_rough_phase4/2026-09-17_09-21-43/model_1499.pt",
+ "config_label": "RL policy (rough-trained PPO)",
+ "slope_degs": [
+  5.0,
+  10.0,
+  15.0,
+  20.0,
+  22.9
+ ],
+ "trials": [
+  {
+   "n": 5,
+   "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "sim_time_mean": 10.0,
+   "sim_time_std": 0.0,
+   "sim_time_min": 10.0,
+   "sim_time_max": 10.0,
+   "fall_rate": 0.0,
+   "secs_requested": 10.0,
+   "slope_deg": 5.0,
+   "wall_s": 9.2
+  },
+  {
+   "n": 5,
+   "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "sim_time_mean": 10.0,
+   "sim_time_std": 0.0,
+   "sim_time_min": 10.0,
+   "sim_time_max": 10.0,
+   "fall_rate": 0.0,
+   "secs_requested": 10.0,
+   "slope_deg": 10.0,
+   "wall_s": 3.8
+  },
+  {
+   "n": 5,
+   "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "sim_time_mean": 10.0,
+   "sim_time_std": 0.0,
+   "sim_time_min": 10.0,
+   "sim_time_max": 10.0,
+   "fall_rate": 0.0,
+   "secs_requested": 10.0,
+   "slope_deg": 15.0,
+   "wall_s": 3.8
+  },
+  {
+   "n": 5,
+   "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "sim_time_mean": 8.588000297546387,
+   "sim_time_std": 2.824000120162964,
+   "sim_time_min": 2.93999981880188,
+   "sim_time_max": 10.0,
+   "fall_rate": 0.20000000298023224,
+   "secs_requested": 10.0,
+   "slope_deg": 20.0,
+   "wall_s": 4.0
+  },
+  {
+   "n": 5,
+   "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "sim_time_mean": 5.355999946594238,
+   "sim_time_std": 2.519345998764038,
+   "sim_time_min": 2.379999876022339,
+   "sim_time_max": 10.0,
+   "fall_rate": 0.800000011920929,
+   "secs_requested": 10.0,
+   "slope_deg": 22.9,
+   "wall_s": 3.9
+  }
+ ],
+ "total_wall_s": 26.8
+}

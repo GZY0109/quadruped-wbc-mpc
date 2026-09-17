@@ -13,8 +13,8 @@
 ## 当前状态
 
 `Phase 2 完成，Phase 3 完成（A: 扰动幅度扫描；B: 地形对比）。项目叙事：分层QP vs 单层QP 的抗扰动鲁棒性
-量化对比（不是"实现稳定行走"）。用户已拍板进 Phase 4（Isaac Lab + RL 对比）。Phase 4 环境搭建已完成并验证
-（Isaac Lab source checkout + isaacsim extra，headless smoke test 通过），训练规模待下一步跟用户确认。`
+量化对比（不是"实现稳定行走"）。Phase 4（Isaac Lab + RL 对比）已完成：训练+评测都跑完，拿到真实数字。
+下一步待定（收尾简历素材 / 继续打磨）。`
 
 - Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py`。
 - Phase 2 选型 ✅ 方案 A（参考架构自实现，MuJoCo 原生，两层 OSQP）。
@@ -129,6 +129,51 @@ git log --oneline -10              # 核对代码进度与本文件一致
 ## 记录
 
 <!-- 格式：### Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么（尽量不写日期，git 已有时间戳） -->
+
+### Phase 4② - RL baseline 训练+评测跑完：关节噪声轴对RL策略是退化轴，改用斜坡角度轴拿到真实断点
+
+Isaac Lab 环境验证过之后，我按官方 Go2 rough-terrain 任务的默认配置（1500 iterations, 4096 并行环境,
+PPO/rsl_rl）跑了一次完整训练，3090 上实测 24分10秒，不是我最初以为的1-2小时——官方默认配置本身就是
+调好的，硬拉更多iteration意义不大，这个判断我在训练前就跟自己确认过。最终收敛：`base_contact`摔倒率
+2.53%，`success_rate`=1.0，平均episode长度997/1000步，checkpoint是`model_1499.pt`。
+
+评测这块我复用了Phase 3的协议（`experiments/isaac_lab_rl_baseline/`），但复用过程中发现一个真问题，不是
+直接套过来就完事：
+
+**关节噪声幅度扫描对RL策略是个退化轴**——按Phase3同样的网格（0~0.08rad，5种子×3地形）跑下来，摔倒率
+全部是0%，一个不落。我没有直接把这个当成"RL更鲁棒"的证据就写进结论，先怀疑是不是扰动事件根本没生效，
+写了个最小diagnostic直接读reset后的关节角，确认扰动确实打进去了（1.0rad幅度下实测关节偏移均值
+0.53~0.57rad，跟设定幅度吻合），甚至把幅度推到1.0rad（约57°，物理上离谱的量级）摔倒率依然是0%。
+这是真实结论，不是bug：RL策略输出关节位置目标，隐式高增益PD在每个20ms控制周期内就能把关节"拉回"，
+恢复速度比经典分层QP每拍解一次力矩QP快得多，对"初始关节角度扰动"这个通道几乎免疫。
+
+这个发现让我意识到Phase3的噪声轴不适合直接套到RL上——换成**斜坡角度扫描**（持续施加的扰动，而不是
+reset时的一次性扰动），角度覆盖5°到训练课程上限22.9°（`slope_range`最大0.4rad）：
+
+| 斜坡角度 | 存活时间 | 摔倒率 |
+|---|---|---|
+| 5° | 10.0±0.0s（撑满） | 0% |
+| 10° | 10.0±0.0s（撑满） | 0% |
+| 15° | 10.0±0.0s（撑满） | 0% |
+| 20° | 8.59±2.82s | 20% |
+| 22.9°（训练课程上限） | 5.36±2.52s | 80% |
+
+这条曲线是干净的、单调的、有真实断点——RL策略在训练分布内（0~22.9°）基本稳，越靠近分布边缘开始退化，
+不是"完全不会摔"也不是"到处都摔"。跟经典分层QP在仅5°斜坡下就100%摔倒的结果放在一起看，这是一个诚实、
+有区分度的对比：两种方法对"扰动类型"的敏感通道完全不同（RL怕分布外的持续性地形倾斜，经典QP怕小幅度
+瞬态关节扰动），不是简单的"谁更好"，是"鲁棒性机制不同"。
+
+三份原始数据：`results/isaac_lab_rl_eval.json`（噪声扫描,退化）、`results/isaac_lab_rl_slope_sweep.json`
+（斜坡扫描,断点曲线）、代码在`experiments/isaac_lab_rl_baseline/`（`eval_cfgs.py`三个地形条件复用Isaac Lab
+现成的terrain primitives、`sweep_eval.py`/`slope_angle_sweep.py`两个扫描脚本）。
+
+途中修了几个真实的版本兼容bug（不是设计问题）：直接实例化env cfg时`sim.physics`还是未解析的
+`PresetCfg`，需要手动调`resolve_presets()`（正常CLI流程里hydra会自动做这一步，绕开CLI就得自己补）；
+`rsl-rl-lib==5.5.1`的`MLPModel`签名跟`isaaclab_rl`的默认agent cfg之间有版本drift，需要调
+`handle_deprecated_rsl_rl_cfg()`（跟官方`play.py`用的是同一个函数）；以及一个我自己写的device
+mismatch（统计张量建在cpu、env在cuda）。
+
+**下一步**：Phase 4 核心工作完成，待决定是否要画对比图/更新README，还是先收尾。
 
 ### Phase 4① - Isaac Lab 环境搭建完成并验证（headless smoke test 通过）
 

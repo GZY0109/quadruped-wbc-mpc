@@ -1,0 +1,490 @@
+{
+ "n_seeds": 5,
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "vx_cmd": 0.3,
+ "checkpoint": "logs/rsl_rl/unitree_go2_rough_phase4/2026-09-17_09-21-43/model_1499.pt",
+ "config_label": "RL policy (rough-trained PPO)",
+ "terrains": {
+  "flat": {
+   "amplitudes": [
+    0.0,
+    0.01,
+    0.02,
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.08
+   ],
+   "trials": [
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.0,
+     "wall_s": 9.4
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.01,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.02,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.03,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.04,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.05,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.06,
+     "wall_s": 3.5
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.08,
+     "wall_s": 3.5
+    }
+   ]
+  },
+  "slope_5deg": {
+   "amplitudes": [
+    0.0,
+    0.01,
+    0.02,
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.08
+   ],
+   "trials": [
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.0,
+     "wall_s": 4.1
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.01,
+     "wall_s": 3.9
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.02,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.03,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.04,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.05,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.06,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.08,
+     "wall_s": 3.9
+    }
+   ]
+  },
+  "rough": {
+   "amplitudes": [
+    0.0,
+    0.01,
+    0.02,
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.08
+   ],
+   "trials": [
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.0,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.01,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.02,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.03,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.04,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.05,
+     "wall_s": 3.8
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.06,
+     "wall_s": 3.7
+    },
+    {
+     "n": 5,
+     "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "sim_time_mean": 10.0,
+     "sim_time_std": 0.0,
+     "sim_time_min": 10.0,
+     "sim_time_max": 10.0,
+     "fall_rate": 0.0,
+     "secs_requested": 10.0,
+     "amplitude": 0.08,
+     "wall_s": 3.8
+    }
+   ]
+  }
+ },
+ "total_wall_s": 105.9
+}
