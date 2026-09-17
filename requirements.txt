@@ -1,8 +1,16 @@
 # Phase 1 core deps. Rendering on headless GPU pods uses OSMesa (software GL),
 # pulled in via the system libosmesa6 package + imageio[ffmpeg] for video encoding.
-mujoco>=3.13,<4
-osqp>=1.1,<2          # Convex-MPC / WBC QP solver (Phase 2)
-numpy>=1.26
-scipy>=1.11
+#
+# Pinned to exact versions (2026-09-17): the closed-loop hierarchical-QP
+# controller runs in a marginally-stable regime (see PROGRESS.md Phase 2(4)),
+# where floating-point rounding differences between unpinned point releases
+# (numpy/scipy/osqp) shifted single-run survival times by seconds across a
+# pod restart with byte-identical code. Unpinned ranges let a fresh
+# `setup_env.sh` reinstall drift onto different point releases and silently
+# invalidate benchmark numbers recorded before the drift.
+mujoco==3.13.0
+osqp==1.1.3           # Convex-MPC / WBC QP solver (Phase 2)
+numpy==2.5.3
+scipy==1.18.1
 matplotlib>=3.7       # result plots (Phase 3)
 imageio[ffmpeg]>=2.31 # demo videos / GIFs

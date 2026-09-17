@@ -102,9 +102,16 @@ def run_trot(
     video_fps: int = 50,
     verbose: bool = True,
     log_tau: bool = False,
+    # Small joint-space init perturbation (uniform +-0.05 rad per joint),
+    # seeded for exact repeatability. Use across a spread of seeds to get a
+    # survival-time distribution instead of one point estimate -- this
+    # marginally-stable controller has been observed to shift outcomes by
+    # seconds between library-version reinstalls, so a single seed=None run
+    # is not a reliable basis for judging whether a parameter change helped.
+    init_noise_seed: int | None = None,
 ):
     sim = Go2Sim(control_dt=0.002)
-    st = sim.reset()
+    st = sim.reset(add_noise=init_noise_seed is not None, seed=init_noise_seed)
     dt = sim.control_dt
     walk_height = float(st.base_pos[2])          # hold the home trunk height
 
@@ -376,6 +383,47 @@ def run_trot(
         print(f"  wrote video -> {out} ({len(frames)} frames)")
 
     return result, log
+
+
+def run_trials(n: int = 5, seeds=None, **run_trot_kwargs) -> dict:
+    """Run the same config across ``n`` seeded initial-noise perturbations and
+    report survival-time / fall-rate statistics instead of a single point
+    estimate. See ``init_noise_seed`` on ``run_trot`` for why: this controller
+    operates in a marginally-stable regime where a single deterministic run
+    (seed=None) has been observed to shift outcomes by seconds between
+    unrelated library-version reinstalls, making single-run comparisons
+    unreliable for judging whether a parameter change actually helped.
+    """
+    seeds = list(seeds) if seeds is not None else list(range(n))
+    run_trot_kwargs.setdefault("verbose", False)
+    run_trot_kwargs.setdefault("video", False)
+    sim_times, max_rolls, max_pitches, fails = [], [], [], []
+    for seed in seeds:
+        result, _ = run_trot(init_noise_seed=seed, **run_trot_kwargs)
+        sim_times.append(result["sim_time"])
+        max_rolls.append(result["max_roll"])
+        max_pitches.append(result["max_pitch"])
+        fails.append(not result["reached_end"])
+    sim_times = np.array(sim_times)
+    secs = run_trot_kwargs.get("secs", 5.0)
+    summary = {
+        "n": len(seeds),
+        "seeds": seeds,
+        "sim_time_mean": float(np.mean(sim_times)),
+        "sim_time_std": float(np.std(sim_times)),
+        "sim_time_min": float(np.min(sim_times)),
+        "sim_time_max": float(np.max(sim_times)),
+        "fall_rate": float(np.mean(fails)),
+        "max_roll_mean": float(np.mean(max_rolls)),
+        "max_pitch_mean": float(np.mean(max_pitches)),
+        "secs_requested": secs,
+    }
+    print(f"  [{len(seeds)} trials] sim_time={summary['sim_time_mean']:.2f}"
+          f"+-{summary['sim_time_std']:.2f}s (min {summary['sim_time_min']:.2f}, "
+          f"max {summary['sim_time_max']:.2f} of {secs}s requested)  "
+          f"fall_rate={summary['fall_rate']:.0%}  "
+          f"max_roll_mean={summary['max_roll_mean']:.1f}deg")
+    return summary
 
 
 def main():

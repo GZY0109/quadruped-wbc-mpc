@@ -161,8 +161,21 @@ class Go2Sim:
         return self.data.sensordata[adr : adr + dim].copy()
 
     # --------------------------------------------------------------- lifecycle
-    def reset(self, keyframe: str | None = "home", add_noise: bool = False) -> RobotState:
-        """Reset to a keyframe (default the ``home`` standing pose) and return state."""
+    def reset(
+        self,
+        keyframe: str | None = "home",
+        add_noise: bool = False,
+        seed: int | None = None,
+    ) -> RobotState:
+        """Reset to a keyframe (default the ``home`` standing pose) and return state.
+
+        ``seed`` draws the init-noise perturbation from a local RNG instead of
+        the global ``np.random`` state, so repeated trials with the same seed
+        reproduce exactly (used for multi-trial statistics across a marginally
+        stable controller, where floating-point-level differences between
+        environment/library versions have been observed to shift outcomes by
+        seconds -- see PROGRESS.md).
+        """
         if keyframe is not None and self.home_key_id >= 0:
             kid = (
                 self.home_key_id
@@ -173,9 +186,8 @@ class Go2Sim:
         else:
             mujoco.mj_resetData(self.model, self.data)
         if add_noise:
-            self.data.qpos[self.joint_qpos_adr] += np.random.uniform(
-                -0.05, 0.05, size=12
-            )
+            rng = np.random.default_rng(seed) if seed is not None else np.random
+            self.data.qpos[self.joint_qpos_adr] += rng.uniform(-0.05, 0.05, size=12)
         mujoco.mj_forward(self.model, self.data)
         return self.get_state()
 
