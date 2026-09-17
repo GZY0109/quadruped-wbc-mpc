@@ -41,4 +41,11 @@ python scripts/stand_test.py --video   # 另存 results/stand_test.mp4
 
 ## 复现结果摘要
 
-<!-- Phase 3 完成后填写：不同地形/扰动下的姿态跟踪误差、成功率对比表 -->
+<!-- Phase 3 完成后填写完整版：不同地形/扰动下的姿态跟踪误差、成功率对比表 -->
+
+**Phase 2④ 阶段性结果**（多次扰动统计，非单次跑测；方法论见 `PROGRESS.md`）：站立场景（stand，四足全程支撑）
+稳定，漂移为 0。行走场景（walk/trot，涉及腿部切换）目前尚未达到稳定：把 WBC 从单一加权和 QP 改成任务优先级
+分层 QP 后，原地踏步（walk）存活时间从 0.87±0.10s 提升到 2.69±1.31s（5 个初始扰动种子，两组分布几乎不重叠，
+改进有统计意义），trot、有前进速度的 walk 也在同一量级（2.6~3.0s）——但三个场景在扰动下 100% 会摔，还不是
+一个可以宣称"稳定行走"的结果。图表 `results/hierarchical_vs_flat.png`，代表性视频（取存活时间最接近均值的
+一次试验，非巧合的最好结果）`results/walk_hierarchical_representative.mp4`。
