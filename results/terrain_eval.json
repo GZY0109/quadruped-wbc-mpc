@@ -1,0 +1,128 @@
+{
+  "n_seeds": 5,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "amplitude": 0.15,
+  "secs": 5.0,
+  "terrains": {
+    "flat": {
+      "flat QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 1.8491999999999351,
+        "sim_time_std": 1.6454624152497637,
+        "sim_time_min": 0.6240000000000004,
+        "sim_time_max": 4.999999999999671,
+        "fall_rate": 0.8,
+        "max_roll_mean": 49.111306750807834,
+        "max_pitch_mean": 23.383398972607807,
+        "secs_requested": 5.0
+      },
+      "hierarchical QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 4.086399999999772,
+        "sim_time_std": 1.130580311167552,
+        "sim_time_min": 2.4599999999999507,
+        "sim_time_max": 4.999999999999671,
+        "fall_rate": 0.4,
+        "max_roll_mean": 40.46385963033069,
+        "max_pitch_mean": 32.88434508987707,
+        "secs_requested": 5.0
+      }
+    },
+    "slope 5deg": {
+      "flat QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 0.9448000000000008,
+        "sim_time_std": 0.18941003141333368,
+        "sim_time_min": 0.7240000000000005,
+        "sim_time_max": 1.2220000000000009,
+        "fall_rate": 1.0,
+        "max_roll_mean": 60.620683990735,
+        "max_pitch_mean": 16.910086805839395,
+        "secs_requested": 5.0
+      },
+      "hierarchical QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 1.918799999999963,
+        "sim_time_std": 0.8549831343365389,
+        "sim_time_min": 0.9160000000000007,
+        "sim_time_max": 3.017999999999889,
+        "fall_rate": 1.0,
+        "max_roll_mean": 50.53688795744107,
+        "max_pitch_mean": 42.55825132297929,
+        "secs_requested": 5.0
+      }
+    },
+    "rough": {
+      "flat QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 2.1339999999999093,
+        "sim_time_std": 1.695666476639663,
+        "sim_time_min": 0.7560000000000006,
+        "sim_time_max": 4.999999999999671,
+        "fall_rate": 0.8,
+        "max_roll_mean": 46.70787529866547,
+        "max_pitch_mean": 43.52333309319856,
+        "secs_requested": 5.0
+      },
+      "hierarchical QP": {
+        "n": 5,
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "sim_time_mean": 3.2371999999998033,
+        "sim_time_std": 2.1688631492095816,
+        "sim_time_min": 0.2660000000000002,
+        "sim_time_max": 4.999999999999671,
+        "fall_rate": 0.4,
+        "max_roll_mean": 37.706152106131015,
+        "max_pitch_mean": 18.95362500154218,
+        "secs_requested": 5.0
+      }
+    }
+  }
+}
