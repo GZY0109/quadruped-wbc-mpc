@@ -13,7 +13,8 @@
 ## 当前状态
 
 `Phase 2 完成，Phase 3 完成（A: 扰动幅度扫描；B: 地形对比）。项目叙事：分层QP vs 单层QP 的抗扰动鲁棒性
-量化对比（不是"实现稳定行走"）。下一步是 Phase 4（Isaac Lab + RL 对比）或收尾，待用户决定。`
+量化对比（不是"实现稳定行走"）。用户已拍板进 Phase 4（Isaac Lab + RL 对比）。Phase 4 环境搭建已完成并验证
+（Isaac Lab source checkout + isaacsim extra，headless smoke test 通过），训练规模待下一步跟用户确认。`
 
 - Phase 1 ✅ 完成：MuJoCo + Go2 环境跑通，`src/sim_env.py`。
 - Phase 2 选型 ✅ 方案 A（参考架构自实现，MuJoCo 原生，两层 OSQP）。
@@ -128,6 +129,54 @@ git log --oneline -10              # 核对代码进度与本文件一致
 ## 记录
 
 <!-- 格式：### Phase X - 一句话摘要 \n 具体做了什么、结果如何、下一步是什么（尽量不写日期，git 已有时间戳） -->
+
+### Phase 4① - Isaac Lab 环境搭建完成并验证（headless smoke test 通过）
+
+用户拍板进 Phase 4（Isaac Lab + RL 对比），本条记录只覆盖"环境装好、能跑起来"这一步，不含训练/评测——
+按约定分开确认，避免一次性把安装问题和训练结果混在一起报告。
+
+**GPU/环境摸底**（只读检查，供拍板参考）：本 pod 是 RTX 3090 24GB（驱动 580.173.02，CUDA 13.0，
+nvcc 12.8），磁盘 60GB（起始可用 59GB）。查了 Isaac Sim 6.1 官方文档确认最低配置是 16GB 显存、
+驱动 `580.95.05`+——3090 达标，**不需要换 4090**（PROJECT_PLAN.md 里"Phase 4 租 4090"是从省钱角度
+的建议，不是硬性要求；两者显存同为 24GB，4090 的算力优势对 IsaacLab 这种显存受限的并行仿真收益有限）。
+
+**Python 版本踩坑（记录以免重复）**：本以为"历史上 Isaac Sim 锁 Python 3.10"（旧版 4.x 确实如此），
+先建了 3.10 venv，装之前查了官方安装文档才发现**这个仓库 clone 下来是 develop 分支、目标 Isaac Sim 6.1，
+锁死 Python 3.12**（`pyproject.toml`: `requires-python = ">=3.12,<3.13"`）——3.10 环境用不上，已删除重建。
+
+**PyPI wheel 安装路径证伪，改用仓库自带 uv workspace**：文档给的标准命令
+`uv pip install "isaaclab[isaacsim]" --overrides ... --prerelease=allow` 反复失败，根因是**发布到 PyPI
+的预发布 wheel 元数据本身有 bug**——`isaaclab[isaacsim]`（3.0.0b2/b2.post1/rc1，唯三支持 cp312 的版本）
+全部锁死 `warp-lang==1.13.0`/`1.16.0`，但同时依赖的 `newton[sim]==1.6.0` 要求 `warp-lang>=1.17.0`，
+两者互斥、无法用任何 pip/uv 参数解开。核对仓库自己的 `pyproject.toml`（dev workspace 模式）发现它已经把
+`warp-lang` 正确锁定成 `1.17.0`（跟 newton 一致），配着仓库自带的 `uv.lock`——这才是官方真正测试过的组合，
+只是没同步进已发布的 wheel 元数据。**改用 `uv sync`（workspace 模式，用仓库 `uv.lock`）而非从 PyPI 装
+`isaaclab[isaacsim]`，问题解决**。
+
+**实际安装步骤**（`/workspace/quadruped-wbc-mpc/IsaacLab`，浅克隆 develop 分支）：
+1. `uv sync`——装 isaaclab 全部 workspace 子模块 + 通用依赖（`torch==2.11.0+cu128`、`warp-lang==1.17.0` 等）。
+   中途因下载大文件（`nvidia-cuda-nvrtc-cu12`）触发默认 30s HTTP 超时失败过一次，`UV_HTTP_TIMEOUT=300`
+   重跑后成功——网络瞬断，不是版本问题。
+2. `uv sync --extra rsl-rl`——PPO 训练用的 `rsl-rl-lib==5.5.1`（这一步几乎瞬间完成，说明主 `uv sync`
+   时已经一并解出来了）。
+3. `uv sync --extra isaacsim`——真正的 Isaac Sim 包本体（`isaacsim[all,extscache]==6.1.0.0`）。
+   踩了一步：一开始漏装这个 extra（以为是 core 依赖，实际是独立 opt-in extra），第一次烟雾测试报
+   `ModuleNotFoundError: No module named 'isaacsim'`，补装后解决。
+
+**验证**（`uv run isaaclab -p -c "import isaacsim; from isaacsim.simulation_app import SimulationApp; ..."`，
+`OMNI_KIT_ACCEPT_EULA=yes`）：headless 启动，~15s 内完成全部 Kit 扩展加载，打印 `SIM_APP_OK` 后正常退出。
+仅有声卡相关的无害警告（pod 无音频设备，预期内）。
+
+**磁盘占用**：`IsaacLab/` 目录（含 venv+isaacsim 缓存）最终 29GB，全局磁盘用量 32GB / 60GB，剩 29GB。
+`IsaacLab/` 和 `.venv-isaac`（已废弃删除）都已加进 `.gitignore`，不会被 commit 进项目仓库——这是第三方
+框架安装产物，不是项目代码，仓库本身保持干净。
+
+**Phase 4 接口约定**（Phase 3 记录里已经定好指标 schema，供这里对齐）：训练/评测阶段要复用同一套
+存活时间 mean±std / fall_rate 指标定义，以及 flat / 5°斜坡 / 粗糙地形三选一优先斜坡的地形集合，才能画出
+经典控制 vs RL 同一张图上的对比曲线。
+
+**下一步（待跟用户确认训练规模，见对话记录，不在此处拍板）**：用 Isaac Lab 官方 Go2 locomotion 任务 +
+rsl_rl 跑 PPO baseline 训练，规模待定（官方默认量级 / 缩短版先验证链路 / 只到这一步为止）。
 
 ### Phase 3 - 扰动幅度扫描 + 地形对比：把"分层QP更鲁棒"从单点结论变成两组独立、可量化、有边界条件的实验
 

@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.venv-isaac/
+IsaacLab/
 *.egg-info/
 .ipynb_checkpoints/
 results/*.npz
